@@ -155,7 +155,7 @@ $('#pending').onclick=async e=>{
 function hero(){
   const g=game.load(),lvl=game.levelOf(g.xp),into=g.xp%game.XP_PER_LEVEL,streak=game.currentStreak(g);
   return `<section class="hero" aria-label="Your progress"><div class="mascot" aria-hidden="true">🧁</div>
-    <div class="hero-main"><div class="lvl"><b id="level">Level ${lvl}</b><span class="chip" id="streak">🔥 ${streak} day${streak===1?'':'s'}</span></div>
+    <div class="hero-main"><div class="lvl"><b id="level">Level ${lvl}</b><span class="chip" id="streak">🔥 ${streak} week${streak===1?'':'s'}</span></div>
     <div class="xpbar" role="progressbar" aria-label="XP to next level" aria-valuemin="0" aria-valuemax="${game.XP_PER_LEVEL}" aria-valuenow="${into}"><i style="width:${into}%"></i></div>
     <small>${into} / ${game.XP_PER_LEVEL} XP · ${g.xp} total</small></div></section>`;
 }

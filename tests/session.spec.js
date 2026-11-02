@@ -123,17 +123,18 @@ test('XP, badges and per-dish progress chart',async({page})=>{
   await expect(page.locator('#trend')).toContainText('One rating');
 });
 
-test('streak continues on consecutive days and lapses after a gap',async({page})=>{
+test('weekly streak: same week keeps it, next week adds, a skipped week lapses',async({page})=>{
   await clean(page);await page.goto('/');
   const r=await page.evaluate(async()=>{
     const game=await import('/js/game.js');
-    const d=n=>new Date(2026,0,n,12);
-    const a=game.award('append',{},d(1)),b=game.award('append',{},d(2)),c=game.award('append',{},d(3)),same=game.award('append',{},d(3));
-    const lapsed=game.currentStreak(game.load(),d(6));
-    const e=game.award('append',{},d(8));
-    return {a:a.streak,b:b.streak,c:c.streak,same:same.streak,sameBonus:same.streakBonus,lapsed,e:e.streak,badges:game.load().badges};
+    const d=n=>new Date(2026,0,n,12); // Jan 5 2026 is a Monday
+    const a=game.award('append',{},d(5)),a2=game.award('append',{},d(8)),same=game.award('append',{},d(11)), // Mon, Thu, Sun: one week
+      b=game.award('append',{},d(12)),c=game.award('append',{},d(19)); // next two weeks
+    const stillOk=game.currentStreak(game.load(),d(31)),lapsed=game.currentStreak(game.load(),new Date(2026,1,9,12)); // next week still ok; skipping a whole week lapses
+    const e=game.award('append',{},new Date(2026,1,9,12));
+    return {a:a.streak,a2:a2.streak,a2bonus:a2.streakBonus,same:same.streak,b:b.streak,c:c.streak,stillOk,lapsed,e:e.streak,badges:game.load().badges};
   });
-  expect(r).toMatchObject({a:1,b:2,c:3,same:3,sameBonus:0,lapsed:0,e:1});
+  expect(r).toMatchObject({a:1,a2:1,a2bonus:0,same:1,b:2,c:3,stillOk:3,lapsed:3,e:1});
   expect(r.badges).toContain('streak3');
 });
 
