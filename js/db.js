@@ -95,3 +95,18 @@ export async function patchPending(id,fields){
   return p;
 }
 export async function deletePending(id){await wrap((await store('pending','readwrite')).delete(id))}
+
+/* ---------- backup support ---------- */
+const STORES=['dishes','versions','pending'];
+export async function dumpAll(){
+  const out={};
+  for(const n of STORES)out[n]=await wrap((await store(n)).getAll());
+  return out;
+}
+/** Replace everything in IndexedDB with the given rows (ids are kept so links between dishes and versions survive). */
+export async function restoreAll(rows){
+  const t=(await open()).transaction(STORES,'readwrite');
+  const done=new Promise((res,rej)=>{t.oncomplete=res;t.onerror=()=>rej(t.error);t.onabort=()=>rej(t.error)});
+  for(const n of STORES){const st=t.objectStore(n);st.clear();for(const r of rows[n]||[])st.put(r)}
+  await done;
+}

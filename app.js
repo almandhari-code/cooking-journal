@@ -7,6 +7,7 @@ import * as sound from './js/sound.js';
 import {celebrate} from './js/fx.js';
 import {progressChart} from './js/chart.js';
 import * as pantry from './js/pantry.js';
+import * as data from './js/data.js';
 
 const app=$('#app');
 let recorder=null;       // active Recorder
@@ -129,6 +130,8 @@ function scheduleDrain(ms=window.CJ_QUEUE_MS||30000){
     for(const p of await db.listPending())if(p.status==='queued'&&p.id!==activeId)await runPending(p.id,{background:true});
   },ms);
 }
+addEventListener('cj-install',()=>{if(!recorder&&(!location.hash||location.hash==='#/'))route(true)});
+data.persist();
 addEventListener('online',()=>scheduleDrain(500));
 async function renderPending(){
   const box=$('#pending');
@@ -161,15 +164,22 @@ function badgesHTML(){
     `<div class="badge ${have.has(b.id)?'got':'locked'}" title="${esc(b.desc)}"><span class="em">${have.has(b.id)?b.emoji:'🔒'}</span><small>${esc(b.name)}</small></div>`).join('')+`</div>`;
 }
 
+const installTile=()=>{
+  const m=data.installMode();
+  return m==='prompt'?`<button class="tile install" id="install" type="button"><strong>📲 Install the app</strong><br><small>Add it to your home screen so it opens like an app</small></button>`
+    :m==='ios'?`<div class="tile install" id="install-ios"><strong>📲 Add to Home Screen</strong><br><small>Tap Share ⬆️ then “Add to Home Screen”. iPhone only keeps recordings safely for installed apps.</small></div>`:'';
+};
 async function home(){
   const dishes=await db.listDishes();
   app.innerHTML=hero()+`<h1>My dishes</h1>`+(dishes.length?dishes.map(d=>`
     <a class="card" href="#/dish/${d.id}"><strong>${esc(d.name)}</strong><br><small>${d.versionCount} version${d.versionCount>1?'s':''}</small></a>`).join('')
     :`<p class="empty">No dishes yet. Tap Record and describe what you cooked.</p>`)
     +`<a class="tile pantry-link" href="#/pantry"><strong>🧺 My pantry</strong><br><small>${pantry.load().length} item${pantry.load().length===1?'':'s'} · see what you can cook</small></a>`
+    +installTile()
     +badgesHTML()
     +`<div class="dock">${recBox('rec','Record','Tap to start, tap again to stop. You can pause any time.')}</div>`;
   if(!groq.getKey())showError(keyMissingMsg);
+  if($('#install'))$('#install').onclick=()=>data.install();
   $('#rec').onclick=ev=>toggleRecord(ev.currentTarget,{kind:'new'});
 }
 
@@ -208,6 +218,7 @@ function review(){
     if(!d.name)return showError('Please enter a dish name.');
     const v=await db.saveVersion({name:d.name,ingredients:d.ingredients,steps:d.steps,transcript:d.transcript,parts:d.parts});
     await Promise.all(d.pendingIds.map(db.deletePending));
+    data.persist();
     const res=game.award('dish',{newDish:v.newDish,n:v.n,long:d.long});
     draft=null;clearError();location.hash='#/version/'+v.id;celebrate(res);
   };
@@ -313,9 +324,29 @@ function settings(){
   <input id="key" type="password" autocomplete="off" placeholder="gsk_..." value="${esc(groq.getKey())}">
   <p class="hint">Stored only in this browser (localStorage). Never sent anywhere except Groq.</p>
   <div class="row"><button class="btn" id="save-key">Save key</button></div><p id="saved" class="muted" role="status"></p>
-  <h2>Sound</h2><label class="toggle"><input type="checkbox" id="mute-setting" ${sound.isMuted()?'checked':''}> Mute sounds</label>`;
+  <h2>Sound</h2><label class="toggle"><input type="checkbox" id="mute-setting" ${sound.isMuted()?'checked':''}> Mute sounds</label>
+  <h2>Your data</h2>
+  <p class="hint">Everything lives only on this device. Export a backup zip (recipes, audio, progress, pantry; not your API key) and import it on a new phone or after clearing data.</p>
+  <div class="row"><button class="btn" id="export" type="button">Export backup (.zip)</button><label class="btn sec" id="import-label">Import backup<input id="import" type="file" accept=".zip,application/zip" hidden></label></div>
+  <p id="data-status" class="muted" role="status"></p><p id="persist-status" class="muted" role="status"></p>`;
   $('#save-key').onclick=()=>{groq.setKey($('#key').value.trim());clearError();$('#saved').textContent='Saved.'};
   $('#mute-setting').onchange=e=>{sound.setMuted(e.target.checked);syncMute()};
+  const status=m=>{$('#data-status').textContent=m};
+  data.persist().then(async()=>{$('#persist-status').textContent=await data.isPersisted()?'Storage: protected from automatic cleanup.':'Storage: the browser may clear this data when space is low. Add the app to your home screen and export backups.'});
+  $('#export').onclick=async()=>{
+    try{
+      const blob=await data.exportAll(),a=document.createElement('a');
+      a.href=URL.createObjectURL(blob);a.download=`cooking-journal-${new Date().toISOString().slice(0,10)}.zip`;
+      document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),10000);
+      status('Backup saved.');
+    }catch(e){status('Export failed: '+e.message)}
+  };
+  $('#import').onchange=async e=>{
+    const f=e.target.files[0];e.target.value='';if(!f)return;
+    if(!confirm('Importing replaces ALL recipes, audio, progress and pantry on this device with the backup. Continue?'))return;
+    try{await data.importAll(f);status('Backup imported.');location.hash='#/';location.reload()}
+    catch(e){status('Import failed: '+e.message)}
+  };
 }
 
 function syncMute(){

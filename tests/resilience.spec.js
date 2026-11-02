@@ -94,3 +94,65 @@ test('3: wake lock requested on start, re-requested when visible again, released
   await page.waitForTimeout(200);
   expect(await page.evaluate(()=>window.__wl.req)).toBe(2);
 });
+
+/** Everything the user owns, comparable: IndexedDB rows with audio as base64, plus cj_* localStorage. */
+const snapshot=page=>page.evaluate(async()=>{
+  const db=await import('/js/db.js');
+  const b64=b=>new Promise(r=>{const f=new FileReader();f.onload=()=>r(f.result);f.readAsDataURL(b)});
+  const enc=async v=>v instanceof Blob?{blob:await b64(v)}:Array.isArray(v)?Promise.all(v.map(enc)):v&&typeof v==='object'?Object.fromEntries(await Promise.all(Object.entries(v).map(async([k,x])=>[k,await enc(x)]))):v;
+  const ls={};for(const k of Object.keys(localStorage))if(k.startsWith('cj_'))ls[k]=localStorage[k];
+  return {db:await enc(await db.dumpAll()),ls};
+});
+
+test('4: export zip, clear everything, import, identical; persist() asked; install prompt',async({page})=>{
+  await seed(page);
+  await page.addInitScript(()=>{window.__persist=0;
+    Object.defineProperty(navigator,'storage',{configurable:true,value:{persist:async()=>{window.__persist++;return true},persisted:async()=>true,estimate:async()=>({})}})});
+  await page.route('**/audio/transcriptions',r=>r.fulfill({json:{text:'rice please'}}));
+  await chatOK(page);
+  await page.goto('/');
+  expect(await page.evaluate(()=>window.__persist)).toBeGreaterThan(0);
+  // a saved dish, a rating, a pending session, pantry, game state
+  await rec(page);await page.click('#save');
+  await page.click('#rec');await page.waitForTimeout(600);await page.click('#rec');await page.click('#save-after');
+  await page.evaluate(async()=>{const db=await import('/js/db.js');const p=await db.createPending({kind:'pantry',status:'error',error:'e'});
+    await db.patchPending(p.id,{parts:[new Blob(['pending-audio'],{type:'audio/webm'})]});
+    const pan=await import('/js/pantry.js');pan.add(['rice','onion'])});
+  const before=await snapshot(page);
+  expect(before.db.versions[0].parts[0].blob).toMatch(/^data:audio/);
+  expect(Object.keys(before.ls)).toEqual(expect.arrayContaining(['cj_game','cj_pantry']));
+
+  await page.goto('/#/settings');
+  const [dl]=await Promise.all([page.waitForEvent('download'),page.click('#export')]);
+  expect(dl.suggestedFilename()).toMatch(/^cooking-journal-.*\.zip$/);
+  const file=await dl.path();
+
+  // wipe everything
+  await page.evaluate(async()=>{const db=await import('/js/db.js');await db.restoreAll({});Object.keys(localStorage).filter(k=>k.startsWith('cj_')).forEach(k=>localStorage.removeItem(k))});
+  const wiped=await snapshot(page);
+  expect(wiped.db.versions).toEqual([]);expect(wiped.ls).toEqual({});
+
+  page.on('dialog',d=>d.accept());
+  await page.setInputFiles('#import',file);
+  await expect.poll(()=>page.evaluate(()=>location.hash)).toBe('#/');
+  await expect(page.locator('.card')).toHaveCount(1);
+  const after=await snapshot(page);
+  expect(after).toEqual(before);
+  expect(await page.evaluate(()=>localStorage.groq_api_key)).toBe('gsk_test'); // untouched, never exported
+});
+
+test('4b: bad file is rejected without touching data',async({page})=>{
+  await seed(page);await page.goto('/#/settings');
+  page.on('dialog',d=>d.accept());
+  await page.setInputFiles('#import',{name:'x.zip',mimeType:'application/zip',buffer:Buffer.from('not a zip at all, definitely')});
+  await expect(page.locator('#data-status')).toContainText('Import failed');
+});
+
+test('4c: install tile appears on beforeinstallprompt and calls prompt()',async({page})=>{
+  await seed(page);await page.goto('/');
+  await expect(page.locator('#install')).toHaveCount(0);
+  await page.evaluate(()=>{const e=new Event('beforeinstallprompt',{cancelable:true});window.__prompted=0;e.prompt=async()=>{window.__prompted++};window.dispatchEvent(e)});
+  await expect(page.locator('#install')).toBeVisible();
+  await page.click('#install');
+  expect(await page.evaluate(()=>window.__prompted)).toBe(1);
+});
