@@ -1,6 +1,6 @@
 const {test,expect}=require('@playwright/test');
 const XSS='<img src=x onerror="window.__xss=1"><script>window.__xss=1</script>';
-const seed=page=>page.addInitScript(()=>{if(!sessionStorage.seeded){localStorage.clear();sessionStorage.seeded=1;localStorage.setItem('groq_api_key','gsk_test')}});
+const seed=page=>page.addInitScript(()=>{if(!sessionStorage.seeded){localStorage.clear();sessionStorage.seeded=1;(localStorage.setItem('cj_onboarded','1'),localStorage.setItem('groq_api_key','gsk_test'))}});
 const quiet=page=>page.addInitScript(()=>localStorage.setItem('cj_notice_seen','1'));
 
 test('8: CSP present; XSS strings render as text in dish, transcript, pantry',async({page})=>{
@@ -73,10 +73,10 @@ test('11: a new service worker version shows the refresh prompt (isolated copy, 
     await page.goto(base+'/');
     await page.evaluate(()=>navigator.serviceWorker.ready);
     await expect(page.locator('#update-btn')).toHaveCount(0);   // first install: no prompt
-    fs.writeFileSync(sw,orig.replace('cj-shell-v8','cj-shell-v9'));   // version bump, in the temp copy only
+    fs.writeFileSync(sw,orig.replace('cj-shell-v9','cj-shell-v10'));   // version bump, in the temp copy only
     await page.evaluate(()=>navigator.serviceWorker.getRegistration().then(r=>r.update()));
     await expect(page.locator('#update-btn')).toHaveText(/tap to refresh/);
     await page.click('#update-btn');
-    await expect.poll(()=>page.evaluate(()=>caches.keys())).toContain('cj-shell-v9');
+    await expect.poll(()=>page.evaluate(()=>caches.keys())).toContain('cj-shell-v10');
   }finally{srv.close();fs.rmSync(dir,{recursive:true,force:true})}
 });

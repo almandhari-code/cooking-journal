@@ -22,13 +22,15 @@ export function enrich(i){
   const uk=[unitKey(unit),...words.map(unitKey)].find(k=>k in UNITS);
   let q=qtyOf(amount)??qtyOf(unit);
   const vague=/\b(some|few|couple|about|around|roughly|approx\w*|a bit|little)\b/i.test(amount+' '+unit);
-  if(!uk){const num=q;return {...i,qty_num:num,unit_std:unit.toLowerCase(),approx:vague||(num==null&&!!amount)}}
+  if(!uk){const num=!/\d/.test(amount+unit)&&/\b(some|few|little|bit)\b/i.test(amount+' '+unit)?null:q; // "some sprinkles" has no number: keep her words
+    return {...i,qty_num:num,unit_std:unit.toLowerCase(),approx:vague||(num==null&&!!amount)}}
   const [std,f,rough]=UNITS[uk];
   if(q==null)q=1;
   return {...i,qty_num:Math.round(q*f*100)/100,unit_std:std,approx:!!rough||vague};
 }
 export const enrichAll=l=>(l||[]).map(enrich);
-export const fmtQty=i=>i.qty_num==null?'':`${i.approx?'≈':''}${i.qty_num}${i.unit_std?' '+i.unit_std:''}`;
+/** "≈30 g". Empty when there is no number or the unit is her own word ("sprinkles"): callers then show her words, see say(). */
+export const fmtQty=i=>i.qty_num==null||(i.unit_std&&i.unit_std!=='g'&&i.unit_std!=='ml')?'':`${i.approx?'≈':''}${i.qty_num}${i.unit_std?' '+i.unit_std:''}`;
 
 /** v1 vs v2: which ingredients were added, removed or changed. Names match loosely (onion ~ onions). */
 const key=n=>String(n||'').toLowerCase().replace(/[^a-z0-9 ]+/g,' ').split(' ').filter(Boolean).map(w=>w.length>3&&w.endsWith('s')&&!w.endsWith('ss')?w.slice(0,-1):w).join(' ');
@@ -44,3 +46,6 @@ export function diffIngredients(oldList,newList){
   o.forEach((x,idx)=>{if(!used.has(idx))removed.push(x)});
   return {added,removed,changed};
 }
+
+/** How to show an amount: the converted figure if there is one, else exactly what she said ("some sprinkles"). */
+export const say=i=>fmtQty(i)||[i.amount,i.unit].filter(Boolean).join(' ');

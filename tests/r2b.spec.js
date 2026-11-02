@@ -1,5 +1,5 @@
 const {test,expect}=require('@playwright/test');
-const clean=page=>page.addInitScript(()=>{if(!sessionStorage.seeded){localStorage.clear();sessionStorage.seeded=1;localStorage.setItem('groq_api_key','gsk_test')}});
+const clean=page=>page.addInitScript(()=>{if(!sessionStorage.seeded){localStorage.clear();sessionStorage.seeded=1;(localStorage.setItem('cj_onboarded','1'),localStorage.setItem('groq_api_key','gsk_test'))}});
 const ai=(page,log,out)=>page.route('**/chat/completions',r=>{const b=r.request().postDataJSON();log.push(b);
   r.fulfill({json:{choices:[{message:{content:JSON.stringify(/better/.test(b.messages[0].content)?{sentence:'More saffron made it richer.'}:out||{dish:'Machboos',ingredients:[{name:'rice',amount:'2',unit:'cups'},{name:'saffron',amount:'1',unit:'pinch'}],steps:['Boil']})}}]}})});
 const seed=page=>page.evaluate(async()=>{

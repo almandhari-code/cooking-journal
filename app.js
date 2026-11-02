@@ -1,7 +1,7 @@
 import * as db from './js/db.js';
 import * as groq from './js/groq.js';
 import {Recorder} from './js/recorder.js';
-import {$,esc,showError,clearError,keyMissingMsg,stars,fmtTime} from './js/ui.js';
+import {$,esc,showError,clearError,keyMissingMsg,stars,fmtTime,drawCard} from './js/ui.js';
 import * as game from './js/game.js';
 import * as sound from './js/sound.js';
 import {celebrate} from './js/fx.js';
@@ -84,7 +84,7 @@ async function finalizeRecording(r,id){
   let parts=[];
   try{parts=await r.stop();await r.q}catch{}
   if(!parts.length){await db.deletePending(id);return null}
-  await db.patchPending(id,{parts,live:null,status:'new',long:r.pauses>0||parts.length>1});
+  await db.patchPending(id,{parts,live:null,status:'new',long:r.pauses>0||parts.length>1,secs:r.seconds});
   return parts;
 }
 
@@ -122,16 +122,17 @@ async function finishPending(p,parts,transcript){
     busy(into?'Adding to your dish…':'Extracting recipe…');
     const r=await groq.extractRecipe(transcript);
     if(into){
+      const off=draft.secs||0; // marks count from the start of their own recording: shift them past what is already in the draft
       Object.assign(draft,db.mergeRecipe(draft,r),{name:draft.name||r.dish,transcript:[draft.transcript,transcript].join('\n\n'),
-        parts:[...draft.parts,...parts],long:draft.long||p.long,pendingIds:[...draft.pendingIds,p.id],marks:[...(draft.marks||[]),...(p.marks||[])]});
+        parts:[...draft.parts,...parts],long:draft.long||p.long,pendingIds:[...draft.pendingIds,p.id],marks:[...(draft.marks||[]),...(p.marks||[]).map(m=>({...m,t:m.t+off}))],secs:off+(p.secs||0)});
       sound.play('success');
-    }else{draft={name:newFor?.name||r.dish,ingredients:r.ingredients,steps:r.steps,transcript,parts,long:p.long,pendingIds:[p.id],marks:p.marks||[]};newFor=null}
+    }else{draft={name:newFor?.name||r.dish,ingredients:r.ingredients,steps:r.steps,transcript,parts,long:p.long,pendingIds:[p.id],marks:p.marks||[],secs:p.secs||0};newFor=null}
     persistDraft();
     if(location.hash==='#/review')await route();else location.hash='#/review';
   }else if(p.kind==='append'){
     busy('Adding to your dish…');
     const recipe=await groq.extractRecipe(transcript);
-    await db.appendToVersion(p.targetId,{parts,transcript,recipe,marks:p.marks||[]});
+    await db.appendToVersion(p.targetId,{parts,transcript,recipe,marks:p.marks||[],secs:p.secs||0});
     await db.deletePending(p.id);
     const res=game.award('append',{long:p.long});
     await route();celebrate(res);
@@ -216,7 +217,7 @@ $('#install').onclick=()=>{
   else{const t=$('#install-ios');t.hidden=!t.hidden}
 };
 const dishStatus=d=>d.status==='finished'?'finished':'planning';
-const dishCard=d=>`<a class="card dishcard" href="#/dish/${d.id}"><strong>${esc(d.name)}</strong> <span class="status ${dishStatus(d)}">${d.status==='finished'?'✅ Finished':'📝 Planning'}</span><br><small>${d.versionCount} version${d.versionCount>1?'s':''}</small></a>`;
+const dishCard=d=>`<a class="card dishcard" href="#/dish/${d.id}"><strong>${esc(d.name)}</strong> <span class="status ${dishStatus(d)}">${d.status==='finished'?'✅ Finished':'📝 Planning'}</span>${d.arabic?`<br><span class="ar" dir="rtl" lang="ar">${esc(d.arabic)}</span>`:''}<br><small>${d.versionCount} version${d.versionCount>1?'s':''}</small></a>`;
 let recMode=null; // 'speak' | 'type'
 let newFor=null; // {id,name}: the cook chose "New version" on a dish page
 const TYPED_MAX=60000;
@@ -323,7 +324,7 @@ function review(){
   $('#save').onclick=async()=>{
     syncDraft();
     if(!d.name)return showError('Please enter a dish name.');
-    const v=await db.saveVersion({name:d.name,ingredients:amounts.enrichAll(d.ingredients),steps:d.steps,transcript:d.transcript,parts:d.parts,typed:!!d.typed,marks:d.marks||[]});
+    const v=await db.saveVersion({name:d.name,ingredients:amounts.enrichAll(d.ingredients),steps:d.steps,transcript:d.transcript,parts:d.parts,typed:!!d.typed,marks:d.marks||[],secs:d.typed?undefined:d.secs});
     await Promise.all(d.pendingIds.map(db.deletePending));await db.clearDraft();
     data.persist();
     const res=game.award('dish',{newDish:v.newDish,n:v.n,long:d.long});
@@ -348,10 +349,10 @@ function useUp(v,res,used){
 
 /** F1: "Why was vN better?" card. The AI sentence is cached on the version; offline or no key = card without it. */
 async function whyCard(w){
-  const q=i=>esc([amounts.fmtQty(i)||[i.amount,i.unit].filter(Boolean).join(' '),i.name].filter(Boolean).join(' '));
+  const q=i=>esc([amounts.say(i),i.name].filter(Boolean).join(' '));
   const {added,removed,changed}=w.diff;
   const rows=[...added.map(i=>`<li class="d-add">+ ${q(i)}</li>`),...removed.map(i=>`<li class="d-rem">− ${q(i)}</li>`),
-    ...changed.map(c=>`<li class="d-chg">~ ${esc(c.to.name)}: ${esc(amounts.fmtQty(c.from)||'?')} → ${esc(amounts.fmtQty(c.to)||'?')}</li>`)];
+    ...changed.map(c=>`<li class="d-chg">~ ${esc(c.to.name)}: ${esc(amounts.say(c.from)||'?')} → ${esc(amounts.say(c.to)||'?')}</li>`)];
   const note=String(w.best.after.notes||'').trim();
   const cached=w.best.why?.key===w.key?w.best.why.text:'';
   return `<section class="panel why" id="why" aria-label="Why was v${w.best.n} better"><h2>Why was v${w.best.n} better? ✨</h2>
@@ -363,7 +364,7 @@ async function whyAI(w,dishName,dishId){
   if(w.best.why?.key===w.key||!groq.getKey())return;
   try{
     const sentence=await groq.explainBetter({dish:dishName,better:{version:w.best.n,rating:w.best.after.rating,notes:w.best.after.notes||''},previous:{version:w.prev.n,rating:w.prev.after?.rating??null},
-      changes:{added:w.diff.added.map(i=>i.name),removed:w.diff.removed.map(i=>i.name),changed:w.diff.changed.map(c=>({name:c.to.name,from:amounts.fmtQty(c.from),to:amounts.fmtQty(c.to)}))}});
+      changes:{added:w.diff.added.map(i=>i.name),removed:w.diff.removed.map(i=>i.name),changed:w.diff.changed.map(c=>({name:c.to.name,from:amounts.say(c.from),to:amounts.say(c.to)}))}});
     if(!sentence)return;
     await db.patchVersion(w.best.id,{why:{key:w.key,text:sentence}});
     if(location.hash==='#/dish/'+dishId&&$('#why-ai'))$('#why-ai').textContent=sentence;
@@ -381,7 +382,7 @@ async function cookView(id){
   <div id="cook-miss">${miss.size?`<p class="miss">Not in your pantry: ${[...miss].map(esc).join(', ')}</p>`:'<p class="miss ok">Your pantry has everything! 🎉</p>'}</div>
   <h2>Ingredients</h2><ul class="rclist" id="cl-ings">${ings.map(i=>{
     const g=amounts.fmtQty(i),has=!miss.has(i.name);
-    return `<li class="${has?'':'lack'}"><label><input type="checkbox"> <span class="rn">${esc(i.name)}</span> <small class="muted">${esc(g||[i.amount,i.unit].filter(Boolean).join(' '))}</small>${has?'':' <span class="flag" title="Not in your pantry">🛒 missing</span>'}</label></li>`}).join('')||'<li class="muted">No ingredients saved.</li>'}</ul>
+    return `<li class="${has?'':'lack'}"><label><input type="checkbox"> <span class="rn">${esc(i.name)}</span> <small class="muted">${esc(g||amounts.say(i))}</small>${has?'':' <span class="flag" title="Not in your pantry">🛒 missing</span>'}</label></li>`}).join('')||'<li class="muted">No ingredients saved.</li>'}</ul>
   <h2>Steps</h2><ol class="rclist" id="cl-steps">${v.steps.map(s=>`<li><label><input type="checkbox"> ${esc(s)}</label></li>`).join('')||'<li class="muted">None</li>'}</ol>`;
 }
 const insight_best=pantry.bestVersion;
@@ -398,21 +399,37 @@ async function dish(id){
   }else if(rated.length===1)trend='One rating so far. Cook it again to see a trend!';
   const w=insight.whyBetter(vs);
   app.innerHTML=`<h1>${esc(d.name)}</h1>
-  <div class="row"><a class="btn small" id="cook-best" href="#/cook/${d.id}">🍳 Cook my best version</a><button class="btn sec small" id="new-ver" type="button">➕ New version</button></div>
+  ${d.arabic?`<p class="ar" id="ar-show" dir="rtl" lang="ar">${esc(d.arabic)}</p>`:''}
+  <div class="row"><a class="btn small" id="cook-best" href="#/cook/${d.id}">${rated.length?'🍳 Cook my best version':'🍳 Cook latest'}</a><button class="btn sec small" id="new-ver" type="button">➕ New version</button><button class="btn sec small" id="share-card" type="button">📤 Share recipe card</button></div>
+  <div class="arform"><label for="ar-name">Arabic name (optional)</label><div class="padd"><input id="ar-name" dir="rtl" lang="ar" maxlength="80" autocomplete="off" placeholder="الاسم بالعربي" value="${esc(d.arabic||'')}"><button class="btn small" id="ar-save" type="button">Save</button></div></div>
   ${w?await whyCard(w):''}
   <section class="panel" aria-label="Progress"><h2>Progress ⭐</h2>${progressChart(vs)}<p class="trend" id="trend">${trend}</p></section>
   <h2>Versions</h2>`+vs.slice().reverse().map(v=>`
     <a class="card" href="#/version/${v.id}"><strong>Version ${v.n}</strong>
     <br><small>${new Date(v.createdAt).toLocaleString()}${v.after?` · <span class="stars">${stars(v.after.rating)}</span>`:''}</small></a>`).join('');
   $('#new-ver').onclick=()=>{newFor={id:d.id,name:d.name};recMode='speak';location.hash='#/'};
+  $('#ar-save').onclick=async()=>{await db.setArabicName(d.id,$('#ar-name').value);sound.play('success');await dish(id)};
+  $('#share-card').onclick=()=>shareCard(d,vs);
   if(w)whyAI(w,d.name,d.id);
+}
+/** Draw the best (or latest) version as a cute PNG and share it, or download it when sharing files is not supported. */
+async function shareCard(d,vs){
+  clearError();
+  const v=pantry.bestVersion(vs);if(!v)return showError('Save a version first.');
+  try{
+    const blob=await new Promise((res,rej)=>drawCard(d,v,amounts).toBlob(b=>b?res(b):rej(new Error('Could not make the picture.')),'image/png'));
+    const file=new File([blob],`${d.name.replace(/[^\p{L}\p{N}]+/gu,'-').replace(/^-|-$/g,'')||'recipe'}.png`,{type:'image/png'});
+    if(navigator.canShare?.({files:[file]})){
+      try{await navigator.share({files:[file],title:d.name})}catch(e){if(e.name!=='AbortError')throw e}
+    }else download(blob,file.name);
+  }catch(e){showError(esc(e.message))}
 }
 
 function diffHTML(prev,v){
   if(!prev)return '';
-  const d=amounts.diffIngredients(prev.ingredients,v.ingredients),q=i=>esc([amounts.fmtQty(i)||[i.amount,i.unit].filter(Boolean).join(' '),i.name].filter(Boolean).join(' '));
+  const d=amounts.diffIngredients(prev.ingredients,v.ingredients),q=i=>esc([amounts.say(i),i.name].filter(Boolean).join(' '));
   const rows=[...d.added.map(i=>`<li class="d-add">+ ${q(i)}</li>`),...d.removed.map(i=>`<li class="d-rem">− ${q(i)}</li>`),
-    ...d.changed.map(c=>`<li class="d-chg">~ ${esc(c.to.name)}: ${esc(amounts.fmtQty(c.from)||'?')} → ${esc(amounts.fmtQty(c.to)||'?')}</li>`)];
+    ...d.changed.map(c=>`<li class="d-chg">~ ${esc(c.to.name)}: ${esc(amounts.say(c.from)||'?')} → ${esc(amounts.say(c.to)||'?')}</li>`)];
   return `<details class="diff" open><summary>Changes since v${prev.n}</summary>${rows.length?`<ul id="diff">${rows.join('')}</ul>`:'<p class="muted" id="diff">Same ingredients and amounts.</p>'}</details>`;
 }
 async function version(id){
@@ -428,7 +445,7 @@ async function version(id){
   app.innerHTML=`<h1>${esc(d.name)} <small class="muted">v${v.n}</small></h1>
   <a class="link" href="#/dish/${d.id}">Progress &amp; all versions</a>
   <h2>Original recording</h2>${hasAudio?audios(v.parts||[v.audio],'Recording')+'<button class="btn sec small" id="del-audio" type="button">Delete recording, keep recipe</button>':`<p class="muted" id="audio-gone">${v.typed&&!v.audioDeleted?'This recipe was typed in, so there is no recording. The text is under Transcript below.':'Recording deleted. The recipe and transcript are kept.'}</p>`}
-  <h2>Ingredients</h2><ul>${v.ingredients.map(i=>`<li>${esc([i.amount,i.unit,i.name].filter(Boolean).join(' '))}${i.qty_num!=null&&i.qty_num!=='' ?` <small class="muted qty">(${esc(amounts.fmtQty(i))})</small>`:''}</li>`).join('')||'<li class="muted">None</li>'}</ul>
+  <h2>Ingredients</h2><ul>${v.ingredients.map(i=>`<li>${esc([i.amount,i.unit,i.name].filter(Boolean).join(' '))}${amounts.fmtQty(i)?` <small class="muted qty">(${esc(amounts.fmtQty(i))})</small>`:''}</li>`).join('')||'<li class="muted">None</li>'}</ul>
   ${diffHTML(prev,v)}
   ${v.marks?.length?`<h2>Your marks 📍</h2>${marksHTML(v.marks,'marks')}`:''}
   <h2>Steps</h2><ol>${v.steps.map(s=>`<li>${esc(s)}</li>`).join('')||'<li class="muted">None</li>'}</ol>
@@ -544,6 +561,31 @@ function receiptUI(renderChips){
   show();
 }
 
+function download(blob,name){
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(blob);a.download=name;
+  document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),10000);
+}
+/** The one real backup export (Settings button and the monthly reminder): saves the zip, records the date, first one earns a badge. */
+async function exportBackup(){
+  const first=!data.lastExport();
+  download(await data.exportAll(),`cooking-journal-${new Date().toISOString().slice(0,10)}.zip`);
+  data.markExported();
+  if(first)celebrate(game.award('backup'));
+  renderBackup();
+}
+/** Monthly reminder: last export over 30 days ago, or never and there is something to lose. */
+let backupLater=false;
+async function renderBackup(){
+  const box=$('#backup');if(!box)return;
+  const due=!backupLater&&data.backupDue((await db.listDishes()).length>0);
+  if(!due){box.innerHTML='';return}
+  const last=data.lastExport();
+  box.innerHTML=`<div class="banner backup" id="backup-banner" role="note"><strong>💾 Time for a backup</strong> <small>${last?`Your last backup was ${Math.floor((Date.now()-last)/864e5)} days ago.`:'You have never made a backup.'} Your recipes only live on this phone.</small><div class="row"><button class="btn small" id="backup-go" type="button">Back up now</button><button class="btn sec small" id="backup-later" type="button">Later</button></div></div>`;
+  $('#backup-go').onclick=async()=>{try{await exportBackup()}catch(e){showError('Export failed: '+esc(e.message))}};
+  $('#backup-later').onclick=()=>{backupLater=true;box.innerHTML=''};
+}
+
 function settings(root){
   root.innerHTML=`<h2>Settings</h2>
   <label for="key">AI key</label>
@@ -560,13 +602,8 @@ function settings(root){
   $('#mute-setting').onchange=e=>{sound.setMuted(e.target.checked);syncMute()};
   const status=m=>{$('#data-status').textContent=m};
   data.persist().then(async()=>{$('#persist-status').textContent=await data.isPersisted()?'Storage: protected from automatic cleanup.':'Storage: the browser may clear this data when space is low. Add the app to your home screen and export backups.'});
-  const download=(blob,name)=>{
-    const a=document.createElement('a');
-    a.href=URL.createObjectURL(blob);a.download=name;
-    document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),10000);
-  };
   $('#export').onclick=async()=>{
-    try{download(await data.exportAll(),`cooking-journal-${new Date().toISOString().slice(0,10)}.zip`);status('Backup saved.')}
+    try{await exportBackup();status('Backup saved.')}
     catch(e){status('Export failed: '+e.message)}
   };
   $('#import').onchange=async e=>{
@@ -606,7 +643,7 @@ async function route(keep){
     else if(page==='version')afterDraft&&afterDraft.versionId===+arg?afterReview():await version(arg);
     else await home();
   }catch(e){fail(e)}
-  renderTabs();renderPending();
+  renderTabs();renderPending();renderBackup();
 }
 /* leaving mid-recording asks first; whatever was recorded is kept as a pending session either way */
 let curHash=location.hash;
@@ -622,6 +659,50 @@ addEventListener('pagehide',flushRecording);
 addEventListener('beforeunload',flushRecording);
 db.loadDraft().then(d=>{draft??=d},()=>{}).then(route).then(async()=>{if((await db.listPending()).some(p=>p.status==='queued'))scheduleDrain()});
 
+/* ---------- first-run onboarding: 3 skippable screens, shown once ---------- */
+function onboarding(){
+  let done=false;try{done=localStorage.getItem('cj_onboarded')}catch{done=true}
+  if(done)return;
+  try{localStorage.setItem('cj_onboarded','1')}catch{}
+  if(groq.getKey())return; // someone who already uses the app does not need a tour
+  const box=$('#onboard');let step=0,rec=null;
+  const close=async()=>{if(rec){const r=rec;rec=null;clearTimeout(r.auto);try{await r.stop()}catch{}}box.innerHTML='';privacyNotice()};
+  const screens=[
+    `<h2>1 of 3 · Get your free AI key 🔑</h2><p>The app needs a free AI key to turn your voice into recipes.</p>
+     <p><a class="btn small" id="ob-link" href="https://console.groq.com/keys" target="_blank" rel="noopener noreferrer">Get free AI key</a></p>
+     <label for="ob-key">Paste it here</label><input id="ob-key" type="password" autocomplete="off" placeholder="Paste your AI key"><div class="row"><button class="btn small" id="ob-save" type="button">Save key</button></div><p id="ob-saved" class="muted" role="status"></p>`,
+    `<h2>2 of 3 · Add to Home Screen 📲</h2><p>On iPhone: tap <b>Share ⬆️</b>, then <b>Add to Home Screen</b>. Installed apps keep your recordings safe.</p><p class="muted">On Android or desktop, use the install button 📲 at the top when it appears.</p>`,
+    `<h2>3 of 3 · Try a 20 second test 🎙️</h2><p>Say anything, like “I am cooking rice with onions”. We show what we heard.</p>
+     <div class="row"><button class="btn" id="ob-rec" type="button">Start test recording</button></div><p id="ob-status" class="muted" role="status"></p><p id="ob-transcript" class="transcript"></p>`];
+  const paint=()=>{
+    box.innerHTML=`<div class="onb" role="dialog" aria-modal="true" aria-label="Welcome"><div class="onb-card">${screens[step]}
+      <div class="row onb-nav"><button class="btn sec small" id="ob-skip" type="button">Skip</button><button class="btn small" id="ob-next" type="button">${step===2?'Done':'Next'}</button></div></div></div>`;
+    $('#ob-skip').onclick=close;
+    $('#ob-next').onclick=()=>{if(step===2)return close();step++;paint()};
+    if(step===0)$('#ob-save').onclick=()=>{const k=$('#ob-key').value.trim();if(!k){$('#ob-saved').textContent='Paste your key first.';return}groq.setKey(k);clearError();$('#ob-saved').textContent='Saved.'};
+    if(step===2)$('#ob-rec').onclick=testRecord;
+  };
+  async function testRecord(){
+    const b=$('#ob-rec'),st=$('#ob-status'),out=$('#ob-transcript');
+    if(rec){const r=rec;rec=null;clearTimeout(r.auto);return finish(r)}
+    if(!groq.getKey()){st.textContent='Add your AI key in step 1 first (or skip this).';return}
+    const r=new Recorder();
+    try{await r.start()}catch(e){st.textContent=e.message;return}
+    rec=r;b.textContent='Stop';st.textContent='Recording… up to 20 seconds';out.textContent='';
+    r.auto=setTimeout(()=>{if(rec===r){rec=null;finish(r)}},(+window.CJ_ONBOARD_SECS||20)*1000);
+    async function finish(r){
+      b.disabled=true;st.textContent='Listening…';
+      try{
+        const parts=await r.stop();
+        const t=parts.length?await groq.transcribe(new Blob(parts,{type:parts[0].type})):'';
+        out.textContent=t?`“${t}”`:'';st.textContent=t?'That is what we heard. Looks good!':'We did not hear any speech. Try again.';
+      }catch(e){st.textContent=e.message==='NO_KEY'?'Add your AI key first.':e.message}
+      if($('#ob-rec')){b.disabled=false;b.textContent='Try again'}
+    }
+  }
+  paint();
+}
+
 /* ---------- one-time privacy notice ---------- */
 function privacyNotice(){
   let seen=false;try{seen=localStorage.getItem('cj_notice_seen')}catch{}
@@ -630,7 +711,8 @@ function privacyNotice(){
   box.innerHTML=`<div class="banner" role="region" aria-label="Privacy"><strong>🔒 Your voice goes to an online AI service</strong><br><small>Your voice is sent to an online AI service to turn it into text and a recipe. Recordings are also kept on this phone. Open any saved dish and tap “Delete recording, keep recipe” to remove the audio but keep the recipe.</small><div class="row"><button class="btn small" id="notice-ok" type="button">Got it</button></div></div>`;
   $('#notice-ok').onclick=()=>{try{localStorage.setItem('cj_notice_seen','1')}catch{}box.innerHTML=''};
 }
-privacyNotice();
+onboarding();
+if(!$('#onboard').innerHTML)privacyNotice(); // the onboarding shows it when it closes
 
 /* ---------- service worker + update prompt ---------- */
 function offerUpdate(worker){

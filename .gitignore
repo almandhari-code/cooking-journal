@@ -4,3 +4,5 @@ tests/screenshots
 .claude-run.log
 SUMMARY*.md
 BRIEF*.md
+screenshots/*.png
+tests/screenshots/*.png

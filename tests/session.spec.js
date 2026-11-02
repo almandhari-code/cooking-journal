@@ -17,8 +17,8 @@ async function mock(page,log){
     r.fulfill({json:{choices:[{message:{content:JSON.stringify(out)}}]}});
   });
 }
-const seedKey=page=>page.addInitScript(()=>{if(!localStorage.groq_api_key)localStorage.setItem('groq_api_key','gsk_test')});
-const clean=page=>page.addInitScript(()=>{if(!sessionStorage.seeded){localStorage.clear();sessionStorage.seeded=1;localStorage.setItem('groq_api_key','gsk_test')}});
+const seedKey=page=>page.addInitScript(()=>{if(!localStorage.groq_api_key)(localStorage.setItem('cj_onboarded','1'),localStorage.setItem('groq_api_key','gsk_test'))});
+const clean=page=>page.addInitScript(()=>{if(!sessionStorage.seeded){localStorage.clear();sessionStorage.seeded=1;(localStorage.setItem('cj_onboarded','1'),localStorage.setItem('groq_api_key','gsk_test'))}});
 
 test('pause/resume keeps one session; Whisper gets Omani vocab; extraction prompt ignores chatter',async({page})=>{
   const log={whisper:[],chat:[]};

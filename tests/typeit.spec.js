@@ -1,5 +1,5 @@
 const {test,expect}=require('@playwright/test');
-const clean=page=>page.addInitScript(()=>{if(!sessionStorage.seeded){localStorage.clear();sessionStorage.seeded=1;localStorage.setItem('groq_api_key','gsk_test')}});
+const clean=page=>page.addInitScript(()=>{if(!sessionStorage.seeded){localStorage.clear();sessionStorage.seeded=1;(localStorage.setItem('cj_onboarded','1'),localStorage.setItem('groq_api_key','gsk_test'))}});
 
 test('Type it: long paste -> same review screen -> saves a dish; draft survives reload; XSS-safe',async({page})=>{
   const log=[];

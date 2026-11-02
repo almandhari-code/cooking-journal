@@ -12,7 +12,7 @@ async function mock(page,log){
     r.fulfill({json:{choices:[{message:{content:JSON.stringify(out)}}]}});
   });
 }
-const clean=page=>page.addInitScript(()=>{if(!sessionStorage.seeded){localStorage.clear();sessionStorage.seeded=1;localStorage.setItem('groq_api_key','gsk_test')}});
+const clean=page=>page.addInitScript(()=>{if(!sessionStorage.seeded){localStorage.clear();sessionStorage.seeded=1;(localStorage.setItem('cj_onboarded','1'),localStorage.setItem('groq_api_key','gsk_test'))}});
 const seed=page=>page.evaluate(async()=>{
   const db=await import('/js/db.js'),b=()=>new Blob(['x'],{type:'audio/webm'});
   const mk=async(name,ings,r)=>{const v=await db.saveVersion({name,ingredients:ings.map(name=>({name,amount:'1',unit:''})),steps:['Cook'],transcript:'t',parts:[b()]});

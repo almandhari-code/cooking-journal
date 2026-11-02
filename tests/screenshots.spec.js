@@ -7,7 +7,7 @@ require('fs').mkdirSync(OUT,{recursive:true});
 test('capture home, recording, dish progress',async({page},info)=>{
   test.skip(info.project.name!=='mobile','mobile only');
   await page.addInitScript(()=>{if(!sessionStorage.seeded){localStorage.clear();sessionStorage.seeded=1;
-    localStorage.setItem('groq_api_key','gsk_test');
+    (localStorage.setItem('cj_onboarded','1'),localStorage.setItem('groq_api_key','gsk_test'));
     const d=new Date(),f=x=>`${x.getFullYear()}-${String(x.getMonth()+1).padStart(2,'0')}-${String(x.getDate()).padStart(2,'0')}`;
     localStorage.setItem('cj_game',JSON.stringify({xp:265,streak:3,best:3,lastDay:f(d),badges:['first-dish','tinkerer','taster','five-star','streak3'],counts:{dish:4,rate:3,five:1,append:0,marathon:0,maxVersions:4}}));}});
   await page.goto('/');

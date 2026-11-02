@@ -1,5 +1,5 @@
 const {test,expect}=require('@playwright/test');
-const seed=page=>page.addInitScript(()=>{if(!sessionStorage.seeded){localStorage.clear();sessionStorage.seeded=1;localStorage.setItem('groq_api_key','gsk_test');localStorage.setItem('cj_notice_seen','1')}});
+const seed=page=>page.addInitScript(()=>{if(!sessionStorage.seeded){localStorage.clear();sessionStorage.seeded=1;(localStorage.setItem('cj_onboarded','1'),localStorage.setItem('groq_api_key','gsk_test'));localStorage.setItem('cj_notice_seen','1')}});
 
 test('A: import confirms with dates/counts, auto-exports a safety zip, keeps pending',async({page})=>{
   await seed(page);await page.goto('/#/settings');

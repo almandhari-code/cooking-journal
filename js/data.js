@@ -70,3 +70,10 @@ export async function importAll(file){
   for(const k of lsKeys())localStorage.removeItem(k);
   for(const [k,v] of Object.entries(m.localStorage||{}))if(k.startsWith(LS_PREFIX))localStorage.setItem(k,v);
 }
+
+/* ---- monthly backup reminder ---- */
+const LAST='cj_last_export',MONTH=30*864e5;
+export const lastExport=()=>+localStorage.getItem(LAST)||0;
+export const markExported=()=>localStorage.setItem(LAST,String(Date.now()));
+/** Remind when the last export is over 30 days old, or when there never was one and there is data. */
+export const backupDue=(hasData,now=Date.now())=>{const l=lastExport();return l?now-l>MONTH:hasData};

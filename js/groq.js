@@ -1,6 +1,7 @@
 import {enrichAll} from './amounts.js';
+import {TEXT_MODELS,WHISPER_MODEL,VISION_MODEL,MODEL_GONE_MSG} from './config.js';
 const BASE='https://api.groq.com/openai/v1';
-export const MODELS=['openai/gpt-oss-120b','qwen/qwen3.8-27b'];
+export const MODELS=TEXT_MODELS;
 export const getKey=()=>localStorage.getItem('groq_api_key')||'';
 export const setKey=k=>k?localStorage.setItem('groq_api_key',k):localStorage.removeItem('groq_api_key');
 
@@ -34,16 +35,18 @@ async function call(path,opts){
     }
     statusFn('');
     if(!r.ok){
-      let m='';try{m=(await r.json()).error?.message||''}catch{}
+      let m='',code='';try{const j=(await r.json()).error;m=j?.message||'';code=j?.code||''}catch{}
       if(r.status===401)throw Object.assign(new Error('The AI service rejected the AI key (401). Check it in Settings.'),{status:401});
       if(r.status===429)throw Object.assign(new Error('AI service rate limit reached (429). It is still busy after several tries.'),{status:429});
-      const e=new Error(`AI service error (${r.status})${m?': '+m:''}`);e.status=r.status;throw e;
+      const e=new Error(`AI service error (${r.status})${m?': '+m:''}`);e.status=r.status;
+      if(r.status===404||/decommission|model_not_found|model.*(does not exist|not found)/i.test(code+' '+m))e.gone=true; // the model id in config.js is retired
+      throw e;
     }
     return r.json();
   }
 }
 
-export const OMANI_VOCAB=['machboos','bzar','shuwa','harees','mashuai','laban','qahwa','halwa','kahwa','maqboos','saloona','mashkak','khubz','dates','cardamom','saffron','loomi'];
+export const OMANI_VOCAB=['madrouba','mishaltit','mkhalif','qabooli','thareed','machboos','bzar','shuwa','harees','mashuai','laban','qahwa','halwa','kahwa','maqboos','saloona','mashkak','khubz','dates','cardamom','saffron','loomi'];
 export const WHISPER_PROMPT='Omani home cooking. Food words: '+OMANI_VOCAB.join(', ')+'.';
 export const MAX_BYTES=25*1024*1024;
 
@@ -52,11 +55,13 @@ export async function transcribe(blob,prev=''){
   const ext=blob.type.includes('mp4')?'mp4':'webm';
   const f=new FormData();
   f.append('file',blob,`audio.${ext}`);
-  f.append('model','whisper-large-v3-turbo');
+  f.append('model',WHISPER_MODEL);
   f.append('language','en');
   // vocab first, tail of previous chunk last (Whisper only reads the end of long prompts)
   f.append('prompt',WHISPER_PROMPT+(prev?' '+prev.slice(-150):''));
-  const j=await call('/audio/transcriptions',{method:'POST',body:f});
+  let j;
+  try{j=await call('/audio/transcriptions',{method:'POST',body:f})}
+  catch(e){throw e.gone?Object.assign(new Error(MODEL_GONE_MSG+' (speech-to-text)'),{status:e.status,gone:true}):e}
   return (j.text||'').trim();
 }
 /** Transcribe chunks in order and merge. onPart(i,n) is called before each chunk. */
@@ -83,6 +88,7 @@ async function chatJSON(system,user){
       last=e;
     }
   }
+  if(last?.gone)throw Object.assign(new Error(MODEL_GONE_MSG),{status:last.status,gone:true}); // every text model is retired
   throw new Error('Could not understand the model response. '+(last?.message||''));
 }
 
@@ -132,11 +138,9 @@ export async function suggestIdeas(pantry,known=[]){
 }
 
 /* ---------- receipts ---------- */
-/** Vision-capable model id (one constant so it is easy to change). Images must be at least 32px on each side. Check the current list at GET /openai/v1/models. */
-export const VISION_MODEL='qwen/qwen3.8-27b';
-export const VISION_GONE_MSG='The AI photo reader is unavailable right now, please try the PDF or type items.';
+export const VISION_GONE_MSG=MODEL_GONE_MSG+' The AI photo reader is unavailable right now, please try the PDF or type items.';
 const stripThink=t=>t.replace(/<think>[\s\S]*?(<\/think>|$)/gi,'').trim();
-const gone=e=>e.status===404||/model_decommissioned|model_not_found/.test(e.message||'');
+const gone=e=>e.gone||e.status===404||/model_decommissioned|model_not_found/.test(e.message||'');
 export const RECEIPT_PROMPT=`You read a grocery receipt or invoice (text, or photos of it) and list ONLY the food and grocery items bought.
 IGNORE everything else: bags, tax/VAT, totals, subtotals, discounts, change, payment, delivery or service fees, store name, address, phone, dates, order numbers, loyalty points.
 Normalize each item to a short lowercase ingredient name in English (singular where natural, no brand, no size in the name), e.g. "ONIONS RED 1.2KG" -> "red onion". Normalize Omani/Arabic food spellings to: ${OMANI_VOCAB.join(', ')}.
@@ -149,7 +153,7 @@ export async function readReceipt({text='',images=[]}){
   let j;
   try{j=await call('/chat/completions',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({model,response_format:{type:'json_object'},messages:[{role:'system',content:RECEIPT_PROMPT},{role:'user',content:images.length?content:content[0].text}]})})}
-  catch(e){if(images.length&&gone(e))throw Object.assign(new Error(VISION_GONE_MSG),{status:e.status});throw e}
+  catch(e){if(gone(e))throw Object.assign(new Error(images.length?VISION_GONE_MSG:MODEL_GONE_MSG),{status:e.status,gone:true});throw e}
   const txt=stripThink(j.choices?.[0]?.message?.content||'');
   try{return JSON.parse(txt.replace(/^```(?:json)?|```$/g,'').trim())}catch{throw new Error('Could not understand the AI reply for this receipt. Try again or add the items by typing.')}
 }

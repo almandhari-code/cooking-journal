@@ -1,5 +1,5 @@
 const {test,expect}=require('@playwright/test');
-const clean=page=>page.addInitScript(()=>{if(!sessionStorage.seeded){localStorage.clear();sessionStorage.seeded=1;localStorage.setItem('groq_api_key','gsk_test')}});
+const clean=page=>page.addInitScript(()=>{if(!sessionStorage.seeded){localStorage.clear();sessionStorage.seeded=1;(localStorage.setItem('cj_onboarded','1'),localStorage.setItem('groq_api_key','gsk_test'))}});
 const chat=(page,fn)=>page.route('**/chat/completions',r=>r.fulfill({json:{choices:[{message:{content:typeof fn==='string'?fn:JSON.stringify(fn(r.request().postDataJSON().messages[0].content))}}]}}));
 const whisper=(page,text)=>page.route('**/audio/transcriptions',r=>r.fulfill({json:{text}}));
 const record=async(page,sel='#rec')=>{await page.click(sel);await expect(page.locator(sel)).toHaveText('Stop');await page.waitForTimeout(600);await page.click(sel)};

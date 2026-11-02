@@ -40,7 +40,7 @@ export async function patchVersion(id,fields){
 }
 
 /** Save a new version; creates the dish if the (case-insensitive) name is new. */
-export async function saveVersion({name,ingredients,steps,transcript,parts,typed=false,marks=[]}){
+export async function saveVersion({name,ingredients,steps,transcript,parts,typed=false,marks=[],secs}){
   name=name.trim();
   const key=name.toLowerCase();
   let dish=await wrap((await store('dishes')).index('key').get(key));
@@ -52,6 +52,7 @@ export async function saveVersion({name,ingredients,steps,transcript,parts,typed
   const n=(await listVersions(dish.id)).length+1;
   const v={dishId:dish.id,n,createdAt:Date.now(),ingredients,steps,transcript,audio:parts[0],parts,after:null};
   if(typed)v.typed=true;
+  if(secs!=null)v.secs=secs; // recorded length in seconds, so later marks can be offset
   if(marks.length)v.marks=marks;
   v.id=await wrap((await store('versions','readwrite')).add(v));
   return {...v,newDish};
@@ -76,13 +77,17 @@ export function mergeRecipe(base,add){
   return {ingredients,steps};
 }
 /** "Add to this dish": append a later recording to a saved version. */
-export async function appendToVersion(id,{parts,transcript,recipe,marks=[]}){
+/** Length of earlier audio in seconds: the stored value, else estimated from file size (recordings are 48 kbps). */
+export const priorSecs=v=>v.secs??Math.round((v.parts||[v.audio]).filter(Boolean).reduce((a,b)=>a+b.size,0)*8/48000);
+export async function appendToVersion(id,{parts,transcript,recipe,marks=[],secs=0}){
   const v=await getVersion(id);
+  const off=priorSecs(v);  // marks in the new recording count from its own start: shift them past the earlier recordings
+  v.secs=off+secs;
   Object.assign(v,mergeRecipe(v,recipe));
   v.parts=[...(v.parts||[v.audio]).filter(Boolean),...parts];
   v.transcript=[v.transcript,transcript].filter(Boolean).join('\n\n');
   v.appends=(v.appends||0)+1;
-  if(marks.length)v.marks=[...(v.marks||[]),...marks];
+  if(marks.length)v.marks=[...(v.marks||[]),...marks.map(m=>({...m,t:m.t+off}))];
   await wrap((await store('versions','readwrite')).put(v));
   return v;
 }
@@ -144,4 +149,12 @@ export async function deleteAudio(id){
   v.audio=null;v.parts=[];v.audioDeleted=true;
   if(v.after){v.after.audio=null;v.after.parts=[]}
   await wrap((await store('versions','readwrite')).put(v));
+}
+
+/* ---------- optional Arabic display name ---------- */
+export async function setArabicName(id,name){
+  const d=await getDish(id);if(!d)return null;
+  name=String(name||'').trim();
+  if(name)d.arabic=name;else delete d.arabic;
+  await wrap((await store('dishes','readwrite')).put(d));return d;
 }

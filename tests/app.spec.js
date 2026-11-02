@@ -27,6 +27,7 @@ async function record(page){
 
 test('full flow',async({page},info)=>{
   proj=info.project.name;
+  await page.addInitScript(()=>localStorage.setItem('cj_onboarded','1'));
   const calls={whisper:0,models:[]};
   await mockGroq(page,calls);
   await page.goto('/');
@@ -82,7 +83,7 @@ test('full flow',async({page},info)=>{
 test('errors: mic denied and API failure',async({browser})=>{
   const ctx=await browser.newContext({permissions:[]});
   const page=await ctx.newPage();
-  await page.addInitScript(()=>{localStorage.setItem('groq_api_key','gsk_test');
+  await page.addInitScript(()=>{(localStorage.setItem('cj_onboarded','1'),localStorage.setItem('groq_api_key','gsk_test'));
     navigator.mediaDevices.getUserMedia=()=>Promise.reject(Object.assign(new Error('x'),{name:'NotAllowedError'}))});
   await page.goto('/');
   await page.locator('#rec').click();
@@ -91,7 +92,7 @@ test('errors: mic denied and API failure',async({browser})=>{
 });
 
 test('errors: network failure shown',async({page})=>{
-  await page.addInitScript(()=>localStorage.setItem('groq_api_key','gsk_test'));
+  await page.addInitScript(()=>(localStorage.setItem('cj_onboarded','1'),localStorage.setItem('groq_api_key','gsk_test')));
   await page.route('https://api.groq.com/**',r=>r.abort());
   await page.goto('/');
   await record(page);
@@ -100,7 +101,7 @@ test('errors: network failure shown',async({page})=>{
 });
 
 test('fallback model used when primary fails',async({page})=>{
-  await page.addInitScript(()=>localStorage.setItem('groq_api_key','gsk_test'));
+  await page.addInitScript(()=>(localStorage.setItem('cj_onboarded','1'),localStorage.setItem('groq_api_key','gsk_test')));
   const models=[];
   await page.route('**/audio/transcriptions',r=>r.fulfill({json:{text:'pasta'}}));
   await page.route('**/chat/completions',r=>{

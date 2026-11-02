@@ -1,7 +1,7 @@
 const {test,expect}=require('@playwright/test');
 const b=()=>new Blob(['x'],{type:'audio/webm'});
 async function seed(page){
-  await page.addInitScript(()=>{if(!sessionStorage.s){localStorage.clear();sessionStorage.s=1;localStorage.setItem('groq_api_key','gsk_test')}});
+  await page.addInitScript(()=>{if(!sessionStorage.s){localStorage.clear();sessionStorage.s=1;(localStorage.setItem('cj_onboarded','1'),localStorage.setItem('groq_api_key','gsk_test'))}});
   await page.goto('/');
   await page.evaluate(async()=>{
     const db=await import('/js/db.js'),bl=()=>new Blob(['x'],{type:'audio/webm'});
@@ -30,6 +30,7 @@ test('Home: level strip, big Record, at most 3 recent dishes, no pantry/install 
   await expect(page.locator('.badge')).toHaveCount(0);
 });
 test('install is a small header icon, shown only when installable',async({page})=>{
+  await page.addInitScript(()=>localStorage.setItem('cj_onboarded','1'));
   await page.goto('/');await expect(page.locator('#install')).toBeHidden();
   await page.evaluate(()=>{const e=new Event('beforeinstallprompt',{cancelable:true});window.__p=0;e.prompt=async()=>{window.__p++};window.dispatchEvent(e)});
   const i=page.locator('.top #install');await expect(i).toBeVisible();

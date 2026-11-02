@@ -1,6 +1,6 @@
 const {test,expect}=require('@playwright/test');
 
-const seed=page=>page.addInitScript(()=>{if(!sessionStorage.seeded){localStorage.clear();sessionStorage.seeded=1;localStorage.setItem('groq_api_key','gsk_test')}});
+const seed=page=>page.addInitScript(()=>{if(!sessionStorage.seeded){localStorage.clear();sessionStorage.seeded=1;(localStorage.setItem('cj_onboarded','1'),localStorage.setItem('groq_api_key','gsk_test'))}});
 const chatOK=page=>page.route('**/chat/completions',r=>{
   const b=r.request().postDataJSON();
   const out=/rating/.test(b.messages[0].content)?{rating:5,notes:'ok'}:{dish:'Machboos',ingredients:[{name:'rice',amount:'2',unit:'cups'}],steps:['Boil rice']};

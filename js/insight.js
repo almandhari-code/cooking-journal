@@ -1,11 +1,11 @@
 import {bestVersion,covers,isStaple} from './pantry.js';
 import {diffIngredients} from './amounts.js';
 
-/** F1: the best-rated version, if it beat the one before it. Returns {best,prev,diff,key} or null. */
+/** F1: the best-rated version, if it beat the latest RATED version below it (falls back to version n-1 when none below is rated). Returns {best,prev,diff,key} or null. */
 export function whyBetter(versions){
   const best=bestVersion(versions);
   if(!best||!best.after||best.n<2)return null;
-  const prev=versions.find(v=>v.n===best.n-1);
+  const prev=versions.filter(v=>v.n<best.n&&v.after).sort((a,b)=>b.n-a.n)[0]||versions.find(v=>v.n===best.n-1);
   if(!prev||(prev.after&&prev.after.rating>=best.after.rating))return null;
   return {best,prev,diff:diffIngredients(prev.ingredients,best.ingredients),key:`${prev.id}:${best.id}:${best.after.rating}:${prev.after?.rating??0}`};
 }

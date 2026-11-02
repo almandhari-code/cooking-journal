@@ -140,3 +140,14 @@ main:has(.dock){padding-bottom:290px}
 .markrow{display:flex;gap:8px;justify-content:center;margin:8px 0}.marks{padding-left:18px}
 .why .d-add{color:#1b6b3a}.why .d-rem{color:#8f1630}.why ul{list-style:none;padding:0}.why-ai{font-style:italic}
 .rclist li.lack .rn{color:#8f1630}.miss{font-weight:700}.miss.ok{color:#1b6b3a}
+
+/* round 3 */
+.rec,.pause,.markrow .mark{min-width:64px;min-height:64px}
+.pause{padding:8px 18px}
+.markrow .mark{padding:8px 18px;font-size:1rem}
+.ar{font-size:1.3rem;font-weight:700;margin:-6px 0 8px;color:var(--accent)}
+.arform{margin:10px 0}.arform .padd input{font-size:1.1rem}
+.banner.backup{background:#d9f5df}.banner.backup .row{margin-top:8px;gap:8px}
+.onb{position:fixed;inset:0;z-index:30;background:rgba(74,35,66,.55);display:flex;align-items:center;justify-content:center;padding:16px;overflow:auto}
+.onb-card{background:var(--card);border:3px solid var(--ink);border-radius:var(--r);box-shadow:var(--sh);padding:18px;max-width:440px;width:100%}
+.onb-card h2{margin-top:0}.onb-nav{justify-content:space-between}
