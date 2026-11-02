@@ -33,7 +33,7 @@ test('8: Clear key removes the key',async({page})=>{
 test('9: privacy notice shows once; delete recording keeps recipe',async({page})=>{
   await seed(page);
   await page.goto('/');
-  await expect(page.locator('#notice')).toContainText('Groq');
+  await expect(page.locator('#notice')).toContainText('online AI service');
   await page.click('#notice-ok');
   await expect(page.locator('#notice')).toBeEmpty();
   await page.reload();

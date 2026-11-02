@@ -32,7 +32,7 @@ test('full flow',async({page},info)=>{
   await page.goto('/');
   // missing key prompts settings
   await page.locator('#rec').click();
-  await expect(page.locator('#error')).toContainText('Groq API key');
+  await expect(page.locator('#error')).toContainText('AI key');
   await shot(page,'home-nokey');
   await page.locator('#error a').click();
   await page.fill('#key','gsk_test');

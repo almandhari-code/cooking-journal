@@ -84,7 +84,7 @@ async function runPending(id,{background=false}={}){
     if(!transcript)throw new Error('No speech was detected. Try recording again.');
     await finishPending(p,parts,transcript);
   }catch(e){
-    const err=e.message==='NO_KEY'?'Add your Groq API key in Settings, then tap Retry.':e.message;
+    const err=e.message==='NO_KEY'?'Add your AI key in Settings, then tap Retry.':e.message;
     await db.patchPending(id,{status:permanent(e)?'error':'queued',error:err}).catch(()=>{});
     if(!background){sound.play('error');await route(true);fail(e)}
     scheduleDrain();
@@ -361,7 +361,7 @@ async function pantryView(){
       if(!groq.getKey())throw new Error('NO_KEY');
       cook.ideas=await groq.suggestIdeas(list,dishes.map(d=>d.name));
       sound.play('success');
-    }catch(e){sound.play('error');cook.err=e.message==='NO_KEY'?'Add your Groq API key in Settings to get new ideas.':e.message}
+    }catch(e){sound.play('error');cook.err=e.message==='NO_KEY'?'Add your AI key in Settings to get new ideas.':e.message}
     if(location.hash==='#/pantry')out.innerHTML=cookHTML();
   };
   $('#rec').onclick=ev=>toggleRecord(ev.currentTarget,{kind:'pantry'});
@@ -369,9 +369,9 @@ async function pantryView(){
 
 function settings(root){
   root.innerHTML=`<h2>Settings</h2>
-  <label for="key">Groq API key</label>
-  <input id="key" type="password" autocomplete="off" placeholder="gsk_..." value="${esc(groq.getKey())}">
-  <p class="hint">Stored only in this browser (localStorage). Never sent anywhere except Groq. When you record, your voice and transcript are sent to Groq to be turned into text and a recipe.</p>
+  <label for="key">AI key</label>
+  <input id="key" type="password" autocomplete="off" placeholder="Paste your AI key" value="${esc(groq.getKey())}">
+  <p class="hint">Stored only in this browser (localStorage). Never sent anywhere except the AI service. Your voice is sent to an online AI service to turn it into text and a recipe.</p>
   <div class="row"><button class="btn" id="save-key">Save key</button><button class="btn sec" id="clear-key" type="button">Clear key</button></div><p id="saved" class="muted" role="status"></p>
   <h2>Sound</h2><label class="toggle"><input type="checkbox" id="mute-setting" ${sound.isMuted()?'checked':''}> Mute sounds</label>
   <h2>Your data</h2>
@@ -449,7 +449,7 @@ function privacyNotice(){
   let seen=false;try{seen=localStorage.getItem('cj_notice_seen')}catch{}
   if(seen)return;
   const box=$('#notice');
-  box.innerHTML=`<div class="banner" role="region" aria-label="Privacy"><strong>🔒 Your voice goes to Groq</strong><br><small>When you record, the audio is sent to Groq to be turned into text and a recipe. Recordings are also kept on this phone. Open any saved dish and tap “Delete recording, keep recipe” to remove the audio but keep the recipe.</small><div class="row"><button class="btn small" id="notice-ok" type="button">Got it</button></div></div>`;
+  box.innerHTML=`<div class="banner" role="region" aria-label="Privacy"><strong>🔒 Your voice goes to an online AI service</strong><br><small>Your voice is sent to an online AI service to turn it into text and a recipe. Recordings are also kept on this phone. Open any saved dish and tap “Delete recording, keep recipe” to remove the audio but keep the recipe.</small><div class="row"><button class="btn small" id="notice-ok" type="button">Got it</button></div></div>`;
   $('#notice-ok').onclick=()=>{try{localStorage.setItem('cj_notice_seen','1')}catch{}box.innerHTML=''};
 }
 privacyNotice();

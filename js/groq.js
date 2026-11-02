@@ -24,10 +24,10 @@ async function call(path,opts){
   for(let attempt=1;;attempt++){
     let r;
     try{r=await fetch(BASE+path,{...opts,headers:{Authorization:'Bearer '+key,...opts.headers}})}
-    catch{statusFn('');throw Object.assign(new Error('Network error: could not reach Groq. Check your connection and try again.'),{network:true})}
+    catch{statusFn('');throw Object.assign(new Error('Network error: could not reach the AI service. Check your connection and try again.'),{network:true})}
     if(r.status===429&&attempt<max){ // rate limited: wait as told and try again, no taps needed
       for(let left=backoffSeconds(r.headers,attempt);left>0;left--){
-        statusFn(`Groq is busy (rate limit). Trying again in ${left}s… (attempt ${attempt+1} of ${max})`);
+        statusFn(`The AI service is busy (rate limit). Trying again in ${left}s… (attempt ${attempt+1} of ${max})`);
         await sleep(1000);
       }
       statusFn('');continue;
@@ -35,9 +35,9 @@ async function call(path,opts){
     statusFn('');
     if(!r.ok){
       let m='';try{m=(await r.json()).error?.message||''}catch{}
-      if(r.status===401)throw Object.assign(new Error('Groq rejected the API key (401). Check it in Settings.'),{status:401});
-      if(r.status===429)throw Object.assign(new Error('Groq rate limit reached (429). Groq is still busy after several tries.'),{status:429});
-      const e=new Error(`Groq API error (${r.status})${m?': '+m:''}`);e.status=r.status;throw e;
+      if(r.status===401)throw Object.assign(new Error('The AI service rejected the AI key (401). Check it in Settings.'),{status:401});
+      if(r.status===429)throw Object.assign(new Error('AI service rate limit reached (429). It is still busy after several tries.'),{status:429});
+      const e=new Error(`AI service error (${r.status})${m?': '+m:''}`);e.status=r.status;throw e;
     }
     return r.json();
   }
@@ -48,7 +48,7 @@ export const WHISPER_PROMPT='Omani home cooking. Food words: '+OMANI_VOCAB.join(
 export const MAX_BYTES=25*1024*1024;
 
 export async function transcribe(blob,prev=''){
-  if(blob.size>=MAX_BYTES)throw new Error('An audio chunk is over Groq\'s 25 MB limit. Try a shorter recording.');
+  if(blob.size>=MAX_BYTES)throw new Error('An audio chunk is over the AI service\'s 25 MB limit. Try a shorter recording.');
   const ext=blob.type.includes('mp4')?'mp4':'webm';
   const f=new FormData();
   f.append('file',blob,`audio.${ext}`);
