@@ -25,6 +25,15 @@ export class Recorder{
     this.rec=this.cur=this._begin();
     this.segMs=0;this.last=performance.now();
     this.timer=setInterval(()=>this._tick(),200);
+    this._vis=()=>{if(document.visibilityState==='visible')this._wake()}; // the browser drops the lock when the page is hidden
+    document.addEventListener('visibilitychange',this._vis);
+    this._wake();
+  }
+  /** Keep the screen on while recording (iOS suspends a locked page and the recording with it). */
+  async _wake(){
+    if(!navigator.wakeLock||this.stopped||(this.lock&&!this.lock.released))return;
+    try{const l=await navigator.wakeLock.request('screen');
+      if(this.stopped)l.release().catch(()=>{});else this.lock=l}catch{}
   }
   _begin(){
     const mime=pickMime(),chunks=[];
@@ -56,7 +65,9 @@ export class Recorder{
   pause(){if(this.paused)return;this.rec.pause();this.paused=true;this.pauses++}
   resume(){if(!this.paused)return;this.rec.resume();this.paused=false;this.last=performance.now()}
   async stop(){
-    clearInterval(this.timer);
+    clearInterval(this.timer);this.stopped=true;
+    document.removeEventListener('visibilitychange',this._vis);
+    this.lock?.release().catch(()=>{});this.lock=null;
     const rec=this.rec;this.cur=null;
     if(rec.state!=='inactive')rec.stop();
     await rec.finished;

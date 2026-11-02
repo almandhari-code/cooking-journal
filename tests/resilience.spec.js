@@ -65,3 +65,32 @@ test('2: leaving mid-recording asks first; hidden/unload flush partial audio to 
   const s=await liveOf(page);
   expect(s.parts).toBeGreaterThanOrEqual(1);expect(s.live).toBe(0);
 });
+
+test('3: wake lock requested on start, re-requested when visible again, released on stop',async({page})=>{
+  await seed(page);
+  await page.addInitScript(()=>{
+    window.__wl={req:0,rel:0,sentinels:[]};
+    Object.defineProperty(navigator,'wakeLock',{configurable:true,value:{request:async()=>{
+      const s={released:false,release:async()=>{if(!s.released){s.released=true;window.__wl.rel++}}};
+      window.__wl.req++;window.__wl.sentinels.push(s);return s}}});
+  });
+  await page.route('**/audio/transcriptions',r=>r.fulfill({json:{text:'x'}}));
+  await chatOK(page);
+  await page.goto('/');
+  expect(await page.evaluate(()=>window.__wl.req)).toBe(0);
+  await page.click('#rec');
+  await expect(page.locator('#rec')).toHaveText('Stop');
+  await expect.poll(()=>page.evaluate(()=>window.__wl.req)).toBe(1);
+  // page hidden: the browser releases the lock by itself; visible again -> we ask again
+  await page.evaluate(()=>{window.__wl.sentinels[0].released=true;
+    Object.defineProperty(document,'visibilityState',{configurable:true,get:()=>'hidden'});document.dispatchEvent(new Event('visibilitychange'));
+    Object.defineProperty(document,'visibilityState',{configurable:true,get:()=>'visible'});document.dispatchEvent(new Event('visibilitychange'))});
+  await expect.poll(()=>page.evaluate(()=>window.__wl.req)).toBe(2);
+  await page.click('#rec');
+  await expect(page.locator('#name')).toBeVisible();
+  expect(await page.evaluate(()=>window.__wl.sentinels[1].released)).toBe(true);
+  // after stop, visibility changes no longer grab a lock
+  await page.evaluate(()=>document.dispatchEvent(new Event('visibilitychange')));
+  await page.waitForTimeout(200);
+  expect(await page.evaluate(()=>window.__wl.req)).toBe(2);
+});
