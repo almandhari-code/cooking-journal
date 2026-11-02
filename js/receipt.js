@@ -5,6 +5,7 @@ import {covers,norm} from './pantry.js';
 const PDF_URL=new URL('../vendor/pdfjs/pdf.min.mjs',import.meta.url).href;
 const WORKER_URL=new URL('../vendor/pdfjs/pdf.worker.min.mjs',import.meta.url).href;
 export const MAX_IMG_BYTES=4*1024*1024;
+export const MAX_FILE_BYTES=25*1024*1024;
 const MAX_PAGES=3,MIN_TEXT=15; // fewer text characters than this = scanned PDF, no text layer
 
 let pdfjs;
@@ -52,12 +53,13 @@ async function shrink(src){
   let w=src.width,h=src.height,max=1600,q=.85,url;
   for(let n=0;n<8;n++){
     const k=Math.min(1,max/Math.max(w,h)),c=document.createElement('canvas');
-    c.width=Math.max(1,Math.round(w*k));c.height=Math.max(1,Math.round(h*k));
+    c.width=Math.max(32,Math.round(w*k));c.height=Math.max(32,Math.round(h*k)); // the vision model needs >=32px per side
     c.getContext('2d').drawImage(src,0,0,c.width,c.height);
     url=c.toDataURL('image/jpeg',q);
     if(url.length*.75<MAX_IMG_BYTES*.9)return url; // base64 is 4/3 the size of the bytes
     max=Math.round(max*.75);q=Math.max(.5,q-.1);
   }
+  if(url.length*.75>=MAX_IMG_BYTES)throw new Error('This picture is too large to send even after shrinking it. Try a smaller photo, or type the items.');
   return url;
 }
 /** Re-encode a photo through a canvas: EXIF and GPS data do not survive. */
@@ -70,7 +72,15 @@ export async function readPhoto(file){
 }
 
 /** Words that mark a line as not-food, even if the AI let it through. */
-const NOT_FOOD=/\b(bags?|vat|tax|total|subtotal|discount|change|cash|card|visa|receipt|invoice|delivery|service|fee|tip|rounding|balance|points|voucher|coupon|store|shop|branch|order|tel|phone)\b/i;
+const NOT_FOOD=new RegExp('^\\s*(?:'+[
+  '(?:(?:carrier|plastic|paper|shopping|reusable)\\s+)?bags?(?:\\s+\\S+)?', // bag lines
+  '(?:vat|tax|gst)\\b.*','(?:sub\\s*)?total\\b.*','grand\\s+total\\b.*','amount\\s+(?:due|paid)\\b.*',
+  'change(?:\\s+due)?','cash(?:\\s+\\S+)?','card(?:\\s+(?:payment|payments))?','(?:visa|mastercard)\\b.*',
+  'discounts?\\b.*','service\\s+(?:charge|fee)\\b.*','delivery(?:\\s+(?:fee|charge))?','(?:tip|rounding|balance|receipt|invoice)\\b.*',
+  '(?:loyalty\\s+)?points\\b.*','(?:voucher|coupon)\\b.*',
+  '(?:order|receipt|invoice|ref|tel|phone)\\s*(?:no\\.?|number|#|:).*','(?:tel|phone)\\b.*',
+  '(?:store|shop|branch)\\s*(?:no\\.?|number|#|:|name|address).*','(?:thank\\s+you).*'
+].join('|')+')\\s*[:.]?\\s*$','i');
 /** Turn the AI reply into checklist rows: food only, deduped, quantities normalized, unsure ones flagged. */
 export function parseReceipt(o,have=[]){
   const arr=Array.isArray(o)?o:Array.isArray(o?.items)?o.items:[];
@@ -87,6 +97,7 @@ export function parseReceipt(o,have=[]){
 }
 /** Full pipeline for a PDF or image file. Returns {rows, source}. Throws a clear message when nothing can be read. */
 export async function importReceipt(file,have=[]){
+  if(file.size>MAX_FILE_BYTES)throw new Error('This file is too large (over 25 MB). Use a smaller PDF or photo, or type the items.');
   const isPdf=file.type==='application/pdf'||/\.pdf$/i.test(file.name);
   const src=isPdf?await readPdf(file):await readPhoto(file);
   const hasText=src.lines?.length>0;

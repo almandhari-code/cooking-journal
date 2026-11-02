@@ -49,17 +49,22 @@ export class Recorder{
     rec.ondataavailable=e=>{
       if(!e.data.size)return;
       rec.init??=e.data;rec.chunks.push(e.data);
-      if(rec.cutting){rec.cutting=false;this.parts.push(this._blob(rec));rec.cuts++;rec.chunks=[]}
+      if(rec.cutting){rec.cutting=false;this._push(rec);rec.cuts++;rec.chunks=[]}
       this._notify();
     };
     rec.finished=new Promise(res=>{rec.onstop=()=>{
-      if(rec.single&&rec.cuts&&rec.chunks.length<=1&&this.parts.length) // stopped right after a cut: this sliver just continues the last part
+      if(rec.single&&rec.cuts&&rec.chunks.length<=2&&this.parts.length) // stopped right after a cut (at most one timeslice): this sliver just continues the last part
         this.parts.push(new Blob([this.parts.pop(),...rec.chunks],{type:rec.mimeType||'audio/webm'}));
-      else if(rec.chunks.length)this.parts.push(this._blob(rec));
+      else if(rec.chunks.length)this._push(rec);
       this._notify();res();
     }});
     single?rec.start(Math.min(5000,this.chunkMs)):rec.start();
     return rec;
+  }
+  /** Add the recorder's window as a part. A single-recorder window holding only the init chunk (no audio) is dropped. */
+  _push(rec){
+    if(rec.single&&rec.chunks.length-(rec.cuts?0:1)<=0&&(rec.cuts||this.parts.length))return;
+    this.parts.push(this._blob(rec));
   }
   /** A standalone file for a recorder's current window. Later windows of a single recorder need its init chunk in front. */
   _blob(rec){return new Blob([...(rec.single&&rec.cuts?[rec.init]:[]),...rec.chunks],{type:rec.mimeType||'audio/webm'})}

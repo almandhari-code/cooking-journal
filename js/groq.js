@@ -76,7 +76,7 @@ async function chatJSON(system,user){
     try{
       const j=await call('/chat/completions',{method:'POST',headers:{'Content-Type':'application/json'},
         body:JSON.stringify({model,response_format:{type:'json_object'},messages:[{role:'system',content:system},{role:'user',content:user}]})});
-      const txt=j.choices?.[0]?.message?.content||'';
+      const txt=stripThink(j.choices?.[0]?.message?.content||'');
       return JSON.parse(txt.replace(/^```(?:json)?|```$/g,'').trim());
     }catch(e){
       if(e.message==='NO_KEY'||e.network||e.status===401||e.status===429)throw e;
@@ -132,8 +132,11 @@ export async function suggestIdeas(pantry,known=[]){
 }
 
 /* ---------- receipts ---------- */
-/** Vision-capable model id (one constant so it is easy to change). Check the current list at GET /openai/v1/models. */
-export const VISION_MODEL='meta-llama/llama-4-scout-17b-16e-instruct';
+/** Vision-capable model id (one constant so it is easy to change). Images must be at least 32px on each side. Check the current list at GET /openai/v1/models. */
+export const VISION_MODEL='qwen/qwen3.8-27b';
+export const VISION_GONE_MSG='The AI photo reader is unavailable right now, please try the PDF or type items.';
+const stripThink=t=>t.replace(/<think>[\s\S]*?(<\/think>|$)/gi,'').trim();
+const gone=e=>e.status===404||/model_decommissioned|model_not_found/.test(e.message||'');
 export const RECEIPT_PROMPT=`You read a grocery receipt or invoice (text, or photos of it) and list ONLY the food and grocery items bought.
 IGNORE everything else: bags, tax/VAT, totals, subtotals, discounts, change, payment, delivery or service fees, store name, address, phone, dates, order numbers, loyalty points.
 Normalize each item to a short lowercase ingredient name in English (singular where natural, no brand, no size in the name), e.g. "ONIONS RED 1.2KG" -> "red onion". Normalize Omani/Arabic food spellings to: ${OMANI_VOCAB.join(', ')}.
@@ -143,8 +146,10 @@ export async function readReceipt({text='',images=[]}){
   const content=[{type:'text',text:text?'Receipt text:\n'+text.slice(0,20000):'The receipt is in the attached image(s).'}];
   for(const url of images.slice(0,5))content.push({type:'image_url',image_url:{url}});
   const model=images.length?VISION_MODEL:MODELS[0];
-  const j=await call('/chat/completions',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({model,response_format:{type:'json_object'},messages:[{role:'system',content:RECEIPT_PROMPT},{role:'user',content:images.length?content:content[0].text}]})});
-  const txt=j.choices?.[0]?.message?.content||'';
+  let j;
+  try{j=await call('/chat/completions',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({model,response_format:{type:'json_object'},messages:[{role:'system',content:RECEIPT_PROMPT},{role:'user',content:images.length?content:content[0].text}]})})}
+  catch(e){if(images.length&&gone(e))throw Object.assign(new Error(VISION_GONE_MSG),{status:e.status});throw e}
+  const txt=stripThink(j.choices?.[0]?.message?.content||'');
   try{return JSON.parse(txt.replace(/^```(?:json)?|```$/g,'').trim())}catch{throw new Error('Could not understand the AI reply for this receipt. Try again or add the items by typing.')}
 }

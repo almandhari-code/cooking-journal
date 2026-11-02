@@ -67,7 +67,7 @@ test('scanned PDF (no text layer): pages are rendered and sent to the vision mod
   await page.setInputFiles('#rc-file',pdfFile([]));
   await expect(page.locator('.rclist li')).toHaveCount(1);
   const b=log[0];
-  expect(b.model).toMatch(/llama-4/);
+  expect(b.model).toBe('qwen/qwen3.8-27b');
   const img=b.messages[1].content.find(c=>c.type==='image_url').image_url.url;
   expect(img).toMatch(/^data:image\/jpeg;base64,/);
   expect(img.length*.75).toBeLessThan(4*1024*1024);
@@ -105,4 +105,44 @@ test('unreadable file gives an error, no key gives the key message',async({page}
   await page.evaluate(()=>localStorage.removeItem('groq_api_key'));
   await page.setInputFiles('#rc-file',pdfFile(RECEIPT));
   await expect(page.locator('#error')).toContainText('AI key');
+});
+
+test('vision model gone (404 / model_decommissioned): friendly message',async({page})=>{
+  await clean(page);
+  await page.addInitScript(()=>localStorage.setItem('cj_receipt_notice_seen','1'));
+  await page.route('**/chat/completions',r=>r.fulfill({status:400,json:{error:{message:'model_decommissioned',code:'model_decommissioned'}}}));
+  await page.goto('/#/pantry');
+  await page.setInputFiles('#rc-file',{name:'r.png',mimeType:'image/png',buffer:PNG});
+  await expect(page.locator('#error')).toContainText('AI photo reader is unavailable');
+  await page.route('**/chat/completions',r=>r.fulfill({status:404,json:{error:{message:'nope'}}}));
+  await page.setInputFiles('#rc-file',{name:'r.png',mimeType:'image/png',buffer:PNG});
+  await expect(page.locator('#error')).toContainText('please try the PDF or type items');
+});
+
+test('<think> blocks are stripped before parsing',async({page})=>{
+  await clean(page);
+  await page.addInitScript(()=>localStorage.setItem('cj_receipt_notice_seen','1'));
+  await page.route('**/chat/completions',r=>r.fulfill({json:{choices:[{message:{content:'<think>hmm {"items":[]}</think>{"items":[{"name":"rice"}]}'}}]}}));
+  await page.goto('/#/pantry');
+  await page.setInputFiles('#rc-file',{name:'r.png',mimeType:'image/png',buffer:PNG});
+  await expect(page.locator('.rclist li')).toHaveCount(1);
+});
+
+test('file over 25 MB is refused with a message',async({page})=>{
+  await clean(page);await mock(page,[],{items:[]});
+  await page.addInitScript(()=>localStorage.setItem('cj_receipt_notice_seen','1'));
+  await page.goto('/#/pantry');
+  await page.setInputFiles('#rc-file',{name:'big.pdf',mimeType:'application/pdf',buffer:Buffer.alloc(30*1024*1024)});
+  await expect(page.locator('#error')).toContainText('over 25 MB');
+});
+
+test('NOT_FOOD matches whole non-food lines, not words inside item names',async({page})=>{
+  await clean(page);
+  await page.addInitScript(()=>localStorage.setItem('cj_receipt_notice_seen','1'));
+  await page.goto('/');
+  const kept=await page.evaluate(async()=>{
+    const {parseReceipt}=await import('/js/receipt.js');
+    return parseReceipt({items:['chicken store pack','VAT 5%','Total','Change','Carrier bag','Order No. 123','Service charge','Store name','orange','Tax'].map(name=>({name}))}).map(r=>r.name);
+  });
+  expect(kept).toEqual(['chicken store pack','orange']);
 });

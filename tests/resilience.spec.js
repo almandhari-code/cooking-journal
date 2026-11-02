@@ -185,8 +185,8 @@ async function threeMinutes(page,cfg){
   await page.goto('/');
   await page.evaluate(async()=>{const {Recorder}=await import('/js/recorder.js');window.__r=new Recorder();await window.__r.start()});
   await page.clock.runFor(180000);
-  await page.evaluate(()=>{window.__stop=window.__r.stop()});
-  await page.clock.runFor(50);
+  await page.evaluate(()=>{window.__stop=window.__r.stop().then(p=>(window.__done=true,p))});
+  for(let i=0;i<40&&!(await page.evaluate(()=>window.__done));i++)await page.clock.runFor(50); // wait for the recorder to finish, not a fixed time
   return page.evaluate(async()=>{const parts=await window.__stop;return {single:window.__r.single,parts:await Promise.all(parts.map(b=>b.text()))}});
 }
 function expectPlayableParts(r){
