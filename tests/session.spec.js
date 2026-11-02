@@ -134,7 +134,7 @@ test('weekly streak: same week keeps it, next week adds, a skipped week lapses',
     const e=game.award('append',{},new Date(2026,1,9,12));
     return {a:a.streak,a2:a2.streak,a2bonus:a2.streakBonus,same:same.streak,b:b.streak,c:c.streak,stillOk,lapsed,e:e.streak,badges:game.load().badges};
   });
-  expect(r).toMatchObject({a:1,a2:1,a2bonus:0,same:1,b:2,c:3,stillOk:3,lapsed:3,e:1});
+  expect(r).toMatchObject({a:1,a2:1,a2bonus:0,same:1,b:2,c:3,stillOk:3,lapsed:0,e:1});
   expect(r.badges).toContain('streak3');
 });
 

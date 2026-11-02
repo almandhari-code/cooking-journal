@@ -105,3 +105,5 @@ summary{font-weight:800;cursor:pointer}
 
 .banner.pend{background:#fff0c9;color:var(--ink)}.banner.pend .row{margin-top:8px;gap:8px}
 #netstatus{background:#fff0c9;color:var(--ink)}
+.diff ul{list-style:none;padding-left:0}.d-add{color:#2a7a3b}.d-rem{color:#b3261e}.d-chg{color:#8a5a00}
+.pchip.unsure{outline:2px dashed #e0a030}.pchip .ok{border:0;background:none;padding:0 4px;cursor:pointer}

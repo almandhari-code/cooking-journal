@@ -1,3 +1,4 @@
+import {enrichAll} from './amounts.js';
 const BASE='https://api.groq.com/openai/v1';
 export const MODELS=['openai/gpt-oss-120b','qwen/qwen3.8-27b'];
 export const getKey=()=>localStorage.getItem('groq_api_key')||'';
@@ -88,12 +89,12 @@ async function chatJSON(system,user){
 export const RECIPE_PROMPT=`You turn a spoken transcript of someone cooking (often Omani or Gulf home cooking) into a recipe. The transcript can be long and messy.
 IGNORE chatter, small talk, jokes, interruptions, repeated or nonsense words, and silence artifacts such as "thank you" or "you". Keep ONLY cooking information: dish name, ingredients, amounts, steps, times, temperatures. Never invent ingredients or steps.
 Normalize Omani/Arabic food spellings to these standard forms: ${OMANI_VOCAB.join(', ')}. For example makbous/machbous/makboos -> machboos, bazaar/bizar/bezar -> bzar, kahwa/gahwa -> qahwa, lomi/limu omani -> loomi.
-Reply with JSON only: {"dish":string,"ingredients":[{"name":string,"amount":string,"unit":string}],"steps":[string]}. Use empty strings when the dish name, amount or unit are unknown. If there is no cooking content, return empty lists.`;
+Reply with JSON only: {"dish":string,"ingredients":[{"name":string,"amount":string,"unit":string,"qty_num":number|null,"unit_std":"g"|"ml"|"","approx":boolean}],"steps":[string]}. amount/unit keep the cook's own words ("a handful", "2 cups"). qty_num is the amount in unit_std (g or ml; a handful ~ 30 g, a pinch ~ 0.4 g, a spoon ~ 12 g, a cup = 240 ml) and approx is true when the amount is vague or a rough unit. Use empty strings when the dish name, amount or unit are unknown, null qty_num when unknown. If there is no cooking content, return empty lists.`;
 export async function extractRecipe(transcript){
   const o=await chatJSON(RECIPE_PROMPT,transcript);
   return {
     dish:String(o.dish||''),
-    ingredients:(Array.isArray(o.ingredients)?o.ingredients:[]).map(i=>({name:String(i.name??''),amount:String(i.amount??''),unit:String(i.unit??'')})),
+    ingredients:enrichAll((Array.isArray(o.ingredients)?o.ingredients:[]).map(i=>({name:String(i.name??''),amount:String(i.amount??''),unit:String(i.unit??'')}))), // numbers always derived locally so they are consistent
     steps:(Array.isArray(o.steps)?o.steps:[]).map(String)
   };
 }
@@ -105,10 +106,24 @@ export async function extractRating(transcript){
   return {rating,notes:String(o.notes||'')};
 }
 
-export const PANTRY_PROMPT='The cook lists food items they have at home (spoken, may include chatter). Reply with JSON only: {"items":[string]}. One short singular-or-natural ingredient name per item, lowercase, no amounts. Ignore chatter and nonsense. Normalize Omani/Arabic spellings to: '+OMANI_VOCAB.join(', ')+'.';
+export const PANTRY_PROMPT='The cook lists food items they have at home (spoken, may include chatter). Reply with JSON only: {"items":[{"name":string,"unsure":boolean}]}. One short ingredient name per item, lowercase, no amounts. Ignore chatter and nonsense. Normalize Omani/Arabic spellings to: '+OMANI_VOCAB.join(', ')+'. Set unsure to true when the word may have been misheard or you are not sure it is a food; otherwise false. Always return every food item mentioned.';
+/** Last-resort parse when the model returns nothing usable: split the transcript on commas / "and". Items are flagged unsure. */
+export function localPantryItems(transcript){
+  return String(transcript||'').toLowerCase().split(/[,،;.\n]+|\band\b|&/)
+    .map(x=>x.replace(/\b(i|we)\s+(have|got)\b|\bthere\s+(is|are)\b|\b(some|also|then|plus|a|an|the|um|uh)\b/g,' ').replace(/[^\p{L}\p{N} -]+/gu,' ').replace(/\s+/g,' ').trim())
+    .filter(x=>x&&x.split(' ').length<=3).map(name=>({name,unsure:true}));
+}
+/** Accepts {"items":[...]} or any other array-of-things the model sends back; strings, {name}, {item}, {ingredient}. */
+export function parsePantry(o){
+  let arr=Array.isArray(o)?o:Array.isArray(o?.items)?o.items:Object.values(o||{}).find(Array.isArray)||(typeof o?.items==='string'?o.items.split(','):[]);
+  return arr.map(x=>typeof x==='object'&&x?{name:String(x.name??x.item??x.ingredient??'').trim(),unsure:!!x.unsure}:{name:String(x).trim(),unsure:false})
+    .filter(x=>x.name&&x.name!=='[object Object]');
+}
 export async function extractPantry(transcript){
-  const o=await chatJSON(PANTRY_PROMPT,transcript);
-  return (Array.isArray(o.items)?o.items:[]).map(x=>String(x).trim()).filter(Boolean);
+  let items=[];
+  try{items=parsePantry(await chatJSON(PANTRY_PROMPT,transcript))}
+  catch(e){if(e.message==='NO_KEY'||e.network||e.status)throw e} // unparseable reply: fall through to the local split
+  return items.length?items:localPantryItems(transcript);
 }
 export const IDEAS_PROMPT='You suggest dishes someone can cook from what is in their pantry (Omani and Gulf home cooking is welcome, but any cuisine is fine). Water, salt and basic oil are always available. Suggest 4 realistic dishes that use mostly pantry items, each needing at most 3 extra ingredients. Do not suggest dishes from the "already known" list. Reply with JSON only: {"ideas":[{"name":string,"why":string (one short sentence),"missing":[string]}]}.';
 export async function suggestIdeas(pantry,known=[]){

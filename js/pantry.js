@@ -5,17 +5,24 @@ const save=a=>localStorage.setItem(KEY,JSON.stringify(a));
 export const norm=s=>String(s||'').toLowerCase().replace(/[^a-z0-9؀-ۿ ]+/g,' ').replace(/\s+/g,' ').trim();
 const stem=w=>w.length>3&&w.endsWith('ies')?w.slice(0,-3)+'y':w.length>3&&w.endsWith('es')&&/(o|ch|sh|x)es$/.test(w)?w.slice(0,-2):w.length>3&&w.endsWith('s')&&!w.endsWith('ss')?w.slice(0,-1):w;
 const words=s=>norm(s).split(' ').filter(Boolean).map(stem);
-/** Add names (deduped, case-insensitive). Returns the names actually added. */
-export function add(names){
-  const list=load(),added=[];
-  for(const n of names){
-    const t=String(n||'').trim().replace(/\s+/g,' ');
-    if(!t||list.some(x=>norm(x)===norm(t)))continue;
+const UKEY='cj_pantry_unsure';
+const loadUnsure=()=>{try{const a=JSON.parse(localStorage.getItem(UKEY));return Array.isArray(a)?a:[]}catch{return []}};
+export const isUnsure=name=>loadUnsure().includes(name);
+/** The cook confirmed a flagged item. */
+export const confirm=name=>localStorage.setItem(UKEY,JSON.stringify(loadUnsure().filter(x=>x!==name)));
+/** Add items: strings or {name,unsure}. An item already covered by one in the pantry (onion/onions/red onion) is merged, not duplicated.
+ *  Returns the names actually added. */
+export function add(items){
+  const list=load(),added=[],unsure=loadUnsure();
+  for(const it of items){
+    const t=String(typeof it==='object'&&it?it.name:it||'').trim().replace(/\s+/g,' ');
+    if(!t||list.some(x=>norm(x)===norm(t)||covers(x,t)))continue;
     list.push(t);added.push(t);
+    if(it&&it.unsure)unsure.push(t);
   }
-  save(list);return added;
+  save(list);localStorage.setItem(UKEY,JSON.stringify(unsure));return added;
 }
-export const remove=name=>save(load().filter(x=>x!==name));
+export const remove=name=>{save(load().filter(x=>x!==name));confirm(name)};
 /** Does pantry item p cover ingredient i? Equal, or one's words are all inside the other's ("red onion" ~ "onion"). */
 export function covers(p,i){
   const a=words(p),b=words(i);

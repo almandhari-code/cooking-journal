@@ -7,6 +7,7 @@ import * as sound from './js/sound.js';
 import {celebrate} from './js/fx.js';
 import {progressChart} from './js/chart.js';
 import * as pantry from './js/pantry.js';
+import * as amounts from './js/amounts.js';
 import * as data from './js/data.js';
 
 const app=$('#app');
@@ -115,11 +116,13 @@ async function finishPending(p,parts,transcript){
     if(location.hash==='#/version/'+p.targetId)await route();else location.hash='#/version/'+p.targetId;
   }else{
     busy('Reading your list…');
-    const added=pantry.add(await groq.extractPantry(transcript));
+    const items=await groq.extractPantry(transcript);
+    const added=pantry.add(items);
+    heard=transcript;
     await db.deletePending(p.id);
     sound.play('success');
     if(location.hash==='#/pantry')await route(true);else location.hash='#/pantry';
-    if(!added.length)showError('Nothing new heard. Try again?');
+    if(!added.length)showError(items.length?'Everything you said is already in your pantry.':'Nothing new heard. Try again?');
   }
 }
 /** Sessions that hit a rate limit or the network are retried automatically later, and when the network comes back. */
@@ -217,7 +220,7 @@ function review(){
   $('#save').onclick=async()=>{
     syncDraft();
     if(!d.name)return showError('Please enter a dish name.');
-    const v=await db.saveVersion({name:d.name,ingredients:d.ingredients,steps:d.steps,transcript:d.transcript,parts:d.parts});
+    const v=await db.saveVersion({name:d.name,ingredients:amounts.enrichAll(d.ingredients),steps:d.steps,transcript:d.transcript,parts:d.parts});
     await Promise.all(d.pendingIds.map(db.deletePending));
     data.persist();
     const res=game.award('dish',{newDish:v.newDish,n:v.n,long:d.long});
@@ -242,10 +245,18 @@ async function dish(id){
     <br><small>${new Date(v.createdAt).toLocaleString()}${v.after?` · <span class="stars">${stars(v.after.rating)}</span>`:''}</small></a>`).join('');
 }
 
+function diffHTML(prev,v){
+  if(!prev)return '';
+  const d=amounts.diffIngredients(prev.ingredients,v.ingredients),q=i=>esc([amounts.fmtQty(i)||[i.amount,i.unit].filter(Boolean).join(' '),i.name].filter(Boolean).join(' '));
+  const rows=[...d.added.map(i=>`<li class="d-add">+ ${q(i)}</li>`),...d.removed.map(i=>`<li class="d-rem">− ${q(i)}</li>`),
+    ...d.changed.map(c=>`<li class="d-chg">~ ${esc(c.to.name)}: ${esc(amounts.fmtQty(c.from)||'?')} → ${esc(amounts.fmtQty(c.to)||'?')}</li>`)];
+  return `<details class="diff" open><summary>Changes since v${prev.n}</summary>${rows.length?`<ul id="diff">${rows.join('')}</ul>`:'<p class="muted" id="diff">Same ingredients and amounts.</p>'}</details>`;
+}
 async function version(id){
   const v=await db.getVersion(+id);
   if(!v){location.hash='#/';return}
   const d=await db.getDish(v.dishId);
+  const prev=v.n>1?(await db.listVersions(v.dishId)).find(x=>x.n===v.n-1):null;
   const audios=(blobs,label)=>blobs.map((b,i)=>{const u=URL.createObjectURL(b);urls.push(u);
     return `${blobs.length>1?`<p class="muted part">${label} part ${i+1}</p>`:''}<audio controls src="${u}"></audio>`}).join('');
   const afterHTML=v.after?`<p><span class="stars" aria-label="Rating ${v.after.rating} of 5">${stars(v.after.rating)}</span></p><p>${esc(v.after.notes)}</p>
@@ -253,7 +264,8 @@ async function version(id){
   app.innerHTML=`<h1>${esc(d.name)} <small class="muted">v${v.n}</small></h1>
   <a class="link" href="#/dish/${d.id}">Progress &amp; all versions</a>
   <h2>Original recording</h2>${audios(v.parts||[v.audio],'Recording')}
-  <h2>Ingredients</h2><ul>${v.ingredients.map(i=>`<li>${esc([i.amount,i.unit,i.name].filter(Boolean).join(' '))}</li>`).join('')||'<li class="muted">None</li>'}</ul>
+  <h2>Ingredients</h2><ul>${v.ingredients.map(i=>`<li>${esc([i.amount,i.unit,i.name].filter(Boolean).join(' '))}${i.qty_num!=null&&i.qty_num!=='' ?` <small class="muted qty">(${esc(amounts.fmtQty(i))})</small>`:''}</li>`).join('')||'<li class="muted">None</li>'}</ul>
+  ${diffHTML(prev,v)}
   <h2>Steps</h2><ol>${v.steps.map(s=>`<li>${esc(s)}</li>`).join('')||'<li class="muted">None</li>'}</ol>
   <details><summary>Transcript</summary><p class="muted transcript">${esc(v.transcript)}</p></details>
   <div class="after"><h2>Still cooking?</h2>${recBox('add-more','Add to this dish','Add more ingredients or steps to this version')}</div>
@@ -281,8 +293,9 @@ function afterReview(){
 
 
 /* ---------- pantry ---------- */
+let heard=''; // what Whisper heard in the last pantry recording
 let cook=null; // last "what can I cook" result, kept while on the pantry page
-const chips=()=>pantry.load().map(p=>`<li class="pchip"><span>${esc(p)}</span><button class="x" type="button" data-name="${esc(p)}" aria-label="Remove ${esc(p)}">✕</button></li>`).join('');
+const chips=()=>pantry.load().map(p=>`<li class="pchip${pantry.isUnsure(p)?' unsure':''}">${pantry.isUnsure(p)?`<button class="ok" type="button" data-name="${esc(p)}" title="Not sure I heard this right. Tap to confirm">❓</button>`:''}<span>${esc(p)}</span><button class="x" type="button" data-name="${esc(p)}" aria-label="Remove ${esc(p)}">✕</button></li>`).join('');
 const missHTML=m=>m.length?`<p class="miss">Missing: ${m.map(esc).join(', ')}</p>`:`<p class="miss ok">You have everything! 🎉</p>`;
 function cookHTML(){
   if(!cook)return '';
@@ -293,7 +306,7 @@ function cookHTML(){
 async function pantryView(){
   app.innerHTML=`<h1>My pantry 🧺</h1>
   <form id="padd" class="padd"><input id="pitem" aria-label="Add an ingredient" placeholder="Type an ingredient…" autocomplete="off"><button class="btn small" type="submit">Add</button></form>
-  <ul id="chips" class="chips" aria-label="Pantry items"></ul><p id="pempty" class="empty" hidden>Your pantry is empty. Type or record what you have.</p>
+  <p id="heard" class="muted" ${heard?'':'hidden'}>Heard: “${esc(heard)}”</p><ul id="chips" class="chips" aria-label="Pantry items"></ul><p id="pempty" class="empty" hidden>Your pantry is empty. Type or record what you have.</p>
   <button class="btn big" id="cook" type="button">🍲 What can I cook?</button>
   <div id="cook-out" aria-live="polite"></div>
   <div class="dock">${recBox('rec','Record','Tap and say what you have, e.g. "rice, onions, chicken"')}</div>`;
@@ -302,7 +315,7 @@ async function pantryView(){
   $('#padd').onsubmit=e=>{e.preventDefault();const v=$('#pitem').value;$('#pitem').value='';
     // allow "rice, onion" typed in one go
     if(pantry.add(v.split(/[,،\n]/)).length)sound.play('tap');render()};
-  $('#chips').onclick=e=>{const b=e.target.closest('.x');if(!b)return;pantry.remove(b.dataset.name);sound.play('tap');render()};
+  $('#chips').onclick=e=>{const o=e.target.closest('.ok');if(o){pantry.confirm(o.dataset.name);render();return}const b=e.target.closest('.x');if(!b)return;pantry.remove(b.dataset.name);sound.play('tap');render()};
   $('#cook').onclick=async()=>{
     clearError();const list=pantry.load(),out=$('#cook-out');
     out.innerHTML='<div class="busy" role="status">Looking through your journal…</div>';
