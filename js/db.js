@@ -69,7 +69,7 @@ export function mergeRecipe(base,add){
 export async function appendToVersion(id,{parts,transcript,recipe}){
   const v=await getVersion(id);
   Object.assign(v,mergeRecipe(v,recipe));
-  v.parts=[...(v.parts||[v.audio]),...parts];
+  v.parts=[...(v.parts||[v.audio]).filter(Boolean),...parts];
   v.transcript=[v.transcript,transcript].filter(Boolean).join('\n\n');
   v.appends=(v.appends||0)+1;
   await wrap((await store('versions','readwrite')).put(v));
@@ -109,4 +109,12 @@ export async function restoreAll(rows){
   const done=new Promise((res,rej)=>{t.oncomplete=res;t.onerror=()=>rej(t.error);t.onabort=()=>rej(t.error)});
   for(const n of STORES){const st=t.objectStore(n);st.clear();for(const r of rows[n]||[])st.put(r)}
   await done;
+}
+
+/** Privacy: remove all audio from a version (and its after-eating note), keep recipe, transcript and rating. */
+export async function deleteAudio(id){
+  const v=await getVersion(id);
+  v.audio=null;v.parts=[];v.audioDeleted=true;
+  if(v.after){v.after.audio=null;v.after.parts=[]}
+  await wrap((await store('versions','readwrite')).put(v));
 }

@@ -259,11 +259,12 @@ async function version(id){
   const prev=v.n>1?(await db.listVersions(v.dishId)).find(x=>x.n===v.n-1):null;
   const audios=(blobs,label)=>blobs.map((b,i)=>{const u=URL.createObjectURL(b);urls.push(u);
     return `${blobs.length>1?`<p class="muted part">${label} part ${i+1}</p>`:''}<audio controls src="${u}"></audio>`}).join('');
+  const hasAudio=(v.parts||[v.audio]).some(Boolean);
   const afterHTML=v.after?`<p><span class="stars" aria-label="Rating ${v.after.rating} of 5">${stars(v.after.rating)}</span></p><p>${esc(v.after.notes)}</p>
-    ${v.after.audio?audios(v.after.parts||[v.after.audio],'Note'):''}`:'<p class="muted">Not rated yet.</p>';
+    ${v.after.audio&&v.after.parts?.length?audios(v.after.parts||[v.after.audio],'Note'):''}`:'<p class="muted">Not rated yet.</p>';
   app.innerHTML=`<h1>${esc(d.name)} <small class="muted">v${v.n}</small></h1>
   <a class="link" href="#/dish/${d.id}">Progress &amp; all versions</a>
-  <h2>Original recording</h2>${audios(v.parts||[v.audio],'Recording')}
+  <h2>Original recording</h2>${hasAudio?audios(v.parts||[v.audio],'Recording')+'<button class="btn sec small" id="del-audio" type="button">Delete recording, keep recipe</button>':'<p class="muted" id="audio-gone">Recording deleted. The recipe and transcript are kept.</p>'}
   <h2>Ingredients</h2><ul>${v.ingredients.map(i=>`<li>${esc([i.amount,i.unit,i.name].filter(Boolean).join(' '))}${i.qty_num!=null&&i.qty_num!=='' ?` <small class="muted qty">(${esc(amounts.fmtQty(i))})</small>`:''}</li>`).join('')||'<li class="muted">None</li>'}</ul>
   ${diffHTML(prev,v)}
   <h2>Steps</h2><ol>${v.steps.map(s=>`<li>${esc(s)}</li>`).join('')||'<li class="muted">None</li>'}</ol>
@@ -273,6 +274,10 @@ async function version(id){
   ${recBox('rec','Record after eating note','Tap to record how it turned out','inline')}</div>`;
   $('#add-more').onclick=ev=>toggleRecord(ev.currentTarget,{kind:'append',targetId:v.id});
   $('#rec').onclick=ev=>toggleRecord(ev.currentTarget,{kind:'after',targetId:v.id});
+  if($('#del-audio'))$('#del-audio').onclick=async()=>{
+    if(!confirm('Delete the audio for this version? The recipe, transcript and rating stay. This cannot be undone.'))return;
+    await db.deleteAudio(v.id);await route();
+  };
 }
 
 function afterReview(){
@@ -336,14 +341,15 @@ function settings(){
   app.innerHTML=`<h1>Settings</h1>
   <label for="key">Groq API key</label>
   <input id="key" type="password" autocomplete="off" placeholder="gsk_..." value="${esc(groq.getKey())}">
-  <p class="hint">Stored only in this browser (localStorage). Never sent anywhere except Groq.</p>
-  <div class="row"><button class="btn" id="save-key">Save key</button></div><p id="saved" class="muted" role="status"></p>
+  <p class="hint">Stored only in this browser (localStorage). Never sent anywhere except Groq. When you record, your voice and transcript are sent to Groq to be turned into text and a recipe.</p>
+  <div class="row"><button class="btn" id="save-key">Save key</button><button class="btn sec" id="clear-key" type="button">Clear key</button></div><p id="saved" class="muted" role="status"></p>
   <h2>Sound</h2><label class="toggle"><input type="checkbox" id="mute-setting" ${sound.isMuted()?'checked':''}> Mute sounds</label>
   <h2>Your data</h2>
   <p class="hint">Everything lives only on this device. Export a backup zip (recipes, audio, progress, pantry; not your API key) and import it on a new phone or after clearing data.</p>
   <div class="row"><button class="btn" id="export" type="button">Export backup (.zip)</button><label class="btn sec" id="import-label">Import backup<input id="import" type="file" accept=".zip,application/zip" hidden></label></div>
   <p id="data-status" class="muted" role="status"></p><p id="persist-status" class="muted" role="status"></p>`;
   $('#save-key').onclick=()=>{groq.setKey($('#key').value.trim());clearError();$('#saved').textContent='Saved.'};
+  $('#clear-key').onclick=()=>{groq.setKey('');$('#key').value='';$('#saved').textContent='Key removed from this browser.'};
   $('#mute-setting').onchange=e=>{sound.setMuted(e.target.checked);syncMute()};
   const status=m=>{$('#data-status').textContent=m};
   data.persist().then(async()=>{$('#persist-status').textContent=await data.isPersisted()?'Storage: protected from automatic cleanup.':'Storage: the browser may clear this data when space is low. Add the app to your home screen and export backups.'});
@@ -401,4 +407,31 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
 addEventListener('pagehide',flushRecording);
 addEventListener('beforeunload',flushRecording);
 route().then(async()=>{if((await db.listPending()).some(p=>p.status==='queued'))scheduleDrain()});
-if('serviceWorker'in navigator)navigator.serviceWorker.register('sw.js').catch(()=>{});
+
+/* ---------- one-time privacy notice ---------- */
+function privacyNotice(){
+  let seen=false;try{seen=localStorage.getItem('cj_notice_seen')}catch{}
+  if(seen)return;
+  const box=$('#notice');
+  box.innerHTML=`<div class="banner" role="region" aria-label="Privacy"><strong>🔒 Your voice goes to Groq</strong><br><small>When you record, the audio is sent to Groq to be turned into text and a recipe. Recordings are also kept on this phone. Open any saved dish and tap “Delete recording, keep recipe” to remove the audio but keep the recipe.</small><div class="row"><button class="btn small" id="notice-ok" type="button">Got it</button></div></div>`;
+  $('#notice-ok').onclick=()=>{try{localStorage.setItem('cj_notice_seen','1')}catch{}box.innerHTML=''};
+}
+privacyNotice();
+
+/* ---------- service worker + update prompt ---------- */
+function offerUpdate(worker){
+  if($('#update-btn'))return;
+  $('#update').innerHTML=`<div class="banner" role="status"><button class="btn small" id="update-btn" type="button">New version available, tap to refresh</button></div>`;
+  $('#update-btn').onclick=()=>{
+    if(recorder&&!confirm('You are recording. Refresh anyway? Your audio so far is saved.'))return;
+    navigator.serviceWorker.addEventListener('controllerchange',()=>location.reload(),{once:true});
+    worker.postMessage('SKIP_WAITING');
+  };
+}
+if('serviceWorker'in navigator)navigator.serviceWorker.register('sw.js').then(reg=>{
+  if(reg.waiting&&navigator.serviceWorker.controller)offerUpdate(reg.waiting);
+  reg.addEventListener('updatefound',()=>{
+    const w=reg.installing;
+    w?.addEventListener('statechange',()=>{if(w.state==='installed'&&navigator.serviceWorker.controller)offerUpdate(w)});
+  });
+}).catch(()=>{});

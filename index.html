@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src https://api.groq.com; media-src blob:; img-src 'self' data:; style-src 'self' 'unsafe-inline'">
 <meta name="theme-color" content="#ff8fb8">
 <title>Cooking Journal</title>
 <link rel="manifest" href="manifest.webmanifest">
@@ -17,6 +18,8 @@
 </header>
 <div id="error" class="banner error" role="alert" hidden></div>
 <div id="netstatus" class="banner" role="status" hidden></div>
+<div id="notice"></div>
+<div id="update"></div>
 <div id="pending"></div>
 <main id="app"></main>
 <div id="toast" role="status" aria-live="polite"></div>
