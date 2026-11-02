@@ -33,7 +33,7 @@ export const getDish=async id=>wrap((await store('dishes')).get(id));
 export const getVersion=async id=>wrap((await store('versions')).get(id));
 
 /** Save a new version; creates the dish if the (case-insensitive) name is new. */
-export async function saveVersion({name,ingredients,steps,transcript,parts}){
+export async function saveVersion({name,ingredients,steps,transcript,parts,typed=false}){
   name=name.trim();
   const key=name.toLowerCase();
   let dish=await wrap((await store('dishes')).index('key').get(key));
@@ -44,6 +44,7 @@ export async function saveVersion({name,ingredients,steps,transcript,parts}){
   }
   const n=(await listVersions(dish.id)).length+1;
   const v={dishId:dish.id,n,createdAt:Date.now(),ingredients,steps,transcript,audio:parts[0],parts,after:null};
+  if(typed)v.typed=true;
   v.id=await wrap((await store('versions','readwrite')).add(v));
   return {...v,newDish};
 }
@@ -122,6 +123,10 @@ export async function restoreAll(rows){
 /* ---------- review draft: survives reloads until it is saved or discarded ---------- */
 export async function saveDraft(d){await wrap((await store('meta','readwrite')).put(d,'draft'))}
 export const loadDraft=async()=>(await wrap((await store('meta')).get('draft')))||null;
+/** The text typed on the Record tab (Type mode) so a reload does not lose a long paste. */
+export async function saveTyped(t){await wrap((await store('meta','readwrite')).put(String(t),'typed'))}
+export const loadTyped=async()=>(await wrap((await store('meta')).get('typed')))||'';
+export async function clearTyped(){await wrap((await store('meta','readwrite')).delete('typed'))}
 export async function clearDraft(){await wrap((await store('meta','readwrite')).delete('draft'))}
 
 /** Privacy: remove all audio from a version (and its after-eating note), keep recipe, transcript and rating. */

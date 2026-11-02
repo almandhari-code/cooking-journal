@@ -130,3 +130,21 @@ export async function suggestIdeas(pantry,known=[]){
   const o=await chatJSON(IDEAS_PROMPT,JSON.stringify({pantry,alreadyKnown:known}));
   return (Array.isArray(o.ideas)?o.ideas:[]).map(i=>({name:String(i.name||''),why:String(i.why||''),missing:(Array.isArray(i.missing)?i.missing:[]).map(String)})).filter(i=>i.name);
 }
+
+/* ---------- receipts ---------- */
+/** Vision-capable model id (one constant so it is easy to change). Check the current list at GET /openai/v1/models. */
+export const VISION_MODEL='meta-llama/llama-4-scout-17b-16e-instruct';
+export const RECEIPT_PROMPT=`You read a grocery receipt or invoice (text, or photos of it) and list ONLY the food and grocery items bought.
+IGNORE everything else: bags, tax/VAT, totals, subtotals, discounts, change, payment, delivery or service fees, store name, address, phone, dates, order numbers, loyalty points.
+Normalize each item to a short lowercase ingredient name in English (singular where natural, no brand, no size in the name), e.g. "ONIONS RED 1.2KG" -> "red onion". Normalize Omani/Arabic food spellings to: ${OMANI_VOCAB.join(', ')}.
+Reply with JSON only: {"items":[{"name":string,"amount":string,"unit":string,"unsure":boolean}]}. amount/unit are the quantity bought in the receipt's own words ("2", "kg"); empty strings when unknown. Set unsure to true when you are not certain the line is food or the name is a guess; otherwise false. If there are no food items, return {"items":[]}.`;
+/** Send receipt text and/or page images (data URLs) to the vision model. Returns the raw parsed JSON. */
+export async function readReceipt({text='',images=[]}){
+  const content=[{type:'text',text:text?'Receipt text:\n'+text.slice(0,20000):'The receipt is in the attached image(s).'}];
+  for(const url of images.slice(0,5))content.push({type:'image_url',image_url:{url}});
+  const model=images.length?VISION_MODEL:MODELS[0];
+  const j=await call('/chat/completions',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({model,response_format:{type:'json_object'},messages:[{role:'system',content:RECEIPT_PROMPT},{role:'user',content:images.length?content:content[0].text}]})});
+  const txt=j.choices?.[0]?.message?.content||'';
+  try{return JSON.parse(txt.replace(/^```(?:json)?|```$/g,'').trim())}catch{throw new Error('Could not understand the AI reply for this receipt. Try again or add the items by typing.')}
+}

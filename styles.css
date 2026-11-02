@@ -128,3 +128,10 @@ summary{font-weight:800;cursor:pointer}
 .fchip.on{background:var(--pink);}
 @media(min-width:900px){#tabs{left:50%;right:auto;transform:translateX(-50%);width:520px;border:3px solid var(--ink);border-bottom:0;border-radius:20px 20px 0 0}.dock{bottom:var(--tab-h)}}
 main:has(.dock){padding-bottom:290px}
+
+.seg{display:flex;gap:6px;justify-content:center;margin:12px 0}
+.seg button{font:inherit;font-weight:700;padding:8px 18px;border:3px solid var(--ink);border-radius:999px;background:#fff;color:var(--ink);cursor:pointer}
+.seg button[aria-pressed="true"]{background:var(--pink,#ff8fb8)}
+.typebox textarea{width:100%;min-height:200px;box-sizing:border-box}
+.receipt{margin:10px 0}
+.rclist{list-style:none;padding:0;margin:8px 0}.rclist li{padding:6px 0}.rclist li.have{opacity:.6}

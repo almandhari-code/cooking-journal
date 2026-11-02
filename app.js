@@ -9,6 +9,7 @@ import {progressChart} from './js/chart.js';
 import * as pantry from './js/pantry.js';
 import * as amounts from './js/amounts.js';
 import * as data from './js/data.js';
+import * as receipt from './js/receipt.js';
 
 const app=$('#app');
 let recorder=null;       // active Recorder
@@ -144,7 +145,8 @@ function renderTabs(){
   document.querySelectorAll('#tabs [data-tab]').forEach(t=>{const on=t.dataset.tab===cur;t.classList.toggle('on',on);on?t.setAttribute('aria-current','page'):t.removeAttribute('aria-current')});
 }
 $('#tab-rec').onclick=()=>{
-  const r=$('#rec');
+  const r=$('#rec'),t=$('#typed');
+  if(t&&(location.hash===''||location.hash==='#/')){t.focus();return}
   if(r&&(location.hash===''||location.hash==='#/'||location.hash==='#/pantry'))r.click();else location.hash='#/';
 };
 renderInstall();
@@ -191,13 +193,44 @@ $('#install').onclick=()=>{
 };
 const dishStatus=d=>d.status==='finished'?'finished':'planning';
 const dishCard=d=>`<a class="card dishcard" href="#/dish/${d.id}"><strong>${esc(d.name)}</strong> <span class="status ${dishStatus(d)}">${d.status==='finished'?'✅ Finished':'📝 Planning'}</span><br><small>${d.versionCount} version${d.versionCount>1?'s':''}</small></a>`;
+let recMode=null; // 'speak' | 'type'
+const TYPED_MAX=60000;
+async function typedRecipe(text){
+  clearError();
+  if(!groq.getKey())return showError(keyMissingMsg);
+  busy('Extracting recipe…');
+  try{
+    const r=await groq.extractRecipe(text);
+    draft={name:r.dish,ingredients:r.ingredients,steps:r.steps,transcript:text,parts:[],long:text.length>1500,pendingIds:[],typed:true};
+    persistDraft();await db.clearTyped();
+    sound.play('success');location.hash='#/review';
+  }catch(e){sound.play('error');await home();fail(e)} // the text stays in the box
+}
 async function home(){
   const dishes=(await db.listDishes()).slice(0,3);
-  app.innerHTML=hero()+`<div class="bigrec">${recBox('rec','Record','Tap to start, tap again to stop. You can pause any time.')}</div>
+  const saved=await db.loadTyped().catch(()=>'');
+  if(recMode==null)recMode=saved?'type':'speak';
+  const seg=`<div class="seg" role="group" aria-label="How do you want to add a dish?"><button type="button" id="m-speak" aria-pressed="${recMode==='speak'}">🎙️ Speak</button><button type="button" id="m-type" aria-pressed="${recMode==='type'}">⌨️ Type</button></div>`;
+  const input=recMode==='type'
+    ?`<div class="typebox"><label for="typed">Paste or type what you cooked</label><textarea id="typed" maxlength="${TYPED_MAX}" placeholder="e.g. Today I made machboos: 2 cups rice, a chicken, onions…" autocomplete="off">${esc(saved)}</textarea><small class="hint" id="typed-count"></small><div class="row"><button class="btn" id="typed-go" type="button">Make recipe</button><button class="btn sec" id="typed-clear" type="button">Clear</button></div></div>`
+    :`<div class="bigrec">${recBox('rec','Record','Tap to start, tap again to stop. You can pause any time.')}</div>`;
+  app.innerHTML=hero()+seg+input+`
   <h2>Recent dishes <a class="link more" href="#/dishes">See all</a></h2>`+(dishes.length?`<div class="recent">${dishes.map(dishCard).join('')}</div>`
     :`<p class="empty">No dishes yet. Tap Record and describe what you cooked.</p>`);
   if(!groq.getKey())showError(keyMissingMsg);
-  $('#rec').onclick=ev=>toggleRecord(ev.currentTarget,{kind:'new'});
+  $('#m-speak').onclick=()=>{recMode='speak';home()};
+  $('#m-type').onclick=()=>{recMode='type';home()};
+  if(recMode==='type'){
+    const t=$('#typed'),cnt=$('#typed-count'),upd=()=>{cnt.textContent=t.value.length?`${t.value.length} characters`:''};
+    upd();
+    t.oninput=()=>{upd();db.saveTyped(t.value).catch(()=>{})};
+    $('#typed-clear').onclick=async()=>{t.value='';upd();await db.clearTyped();t.focus()};
+    $('#typed-go').onclick=()=>{
+      const v=t.value.trim();
+      if(!v)return showError('Type or paste what you cooked first.');
+      typedRecipe(v);
+    };
+  }else $('#rec').onclick=ev=>toggleRecord(ev.currentTarget,{kind:'new'});
 }
 let dishFilter='all';
 async function dishesView(){
@@ -250,7 +283,7 @@ function review(){
   $('#save').onclick=async()=>{
     syncDraft();
     if(!d.name)return showError('Please enter a dish name.');
-    const v=await db.saveVersion({name:d.name,ingredients:amounts.enrichAll(d.ingredients),steps:d.steps,transcript:d.transcript,parts:d.parts});
+    const v=await db.saveVersion({name:d.name,ingredients:amounts.enrichAll(d.ingredients),steps:d.steps,transcript:d.transcript,parts:d.parts,typed:!!d.typed});
     await Promise.all(d.pendingIds.map(db.deletePending));await db.clearDraft();
     data.persist();
     const res=game.award('dish',{newDish:v.newDish,n:v.n,long:d.long});
@@ -294,7 +327,7 @@ async function version(id){
     ${v.after.audio&&v.after.parts?.length?audios(v.after.parts||[v.after.audio],'Note'):''}`:'<p class="muted">Not rated yet.</p>';
   app.innerHTML=`<h1>${esc(d.name)} <small class="muted">v${v.n}</small></h1>
   <a class="link" href="#/dish/${d.id}">Progress &amp; all versions</a>
-  <h2>Original recording</h2>${hasAudio?audios(v.parts||[v.audio],'Recording')+'<button class="btn sec small" id="del-audio" type="button">Delete recording, keep recipe</button>':'<p class="muted" id="audio-gone">Recording deleted. The recipe and transcript are kept.</p>'}
+  <h2>Original recording</h2>${hasAudio?audios(v.parts||[v.audio],'Recording')+'<button class="btn sec small" id="del-audio" type="button">Delete recording, keep recipe</button>':`<p class="muted" id="audio-gone">${v.typed&&!v.audioDeleted?'This recipe was typed in, so there is no recording. The text is under Transcript below.':'Recording deleted. The recipe and transcript are kept.'}</p>`}
   <h2>Ingredients</h2><ul>${v.ingredients.map(i=>`<li>${esc([i.amount,i.unit,i.name].filter(Boolean).join(' '))}${i.qty_num!=null&&i.qty_num!=='' ?` <small class="muted qty">(${esc(amounts.fmtQty(i))})</small>`:''}</li>`).join('')||'<li class="muted">None</li>'}</ul>
   ${diffHTML(prev,v)}
   <h2>Steps</h2><ol>${v.steps.map(s=>`<li>${esc(s)}</li>`).join('')||'<li class="muted">None</li>'}</ol>
@@ -341,6 +374,7 @@ function cookHTML(){
 async function pantryView(){
   app.innerHTML=`<h1>My pantry 🧺</h1>
   <form id="padd" class="padd"><input id="pitem" aria-label="Add an ingredient" placeholder="Type an ingredient…" autocomplete="off"><button class="btn small" type="submit">Add</button></form>
+  <div class="receipt"><label class="btn sec small" id="rc-label">🧾 Add from receipt<input id="rc-file" type="file" accept="application/pdf,image/*" hidden></label><small class="hint"> PDF or photo</small></div><div id="rc-out" aria-live="polite"></div>
   <p id="heard" class="muted" ${heard?'':'hidden'}>Heard: “${esc(heard)}”</p><ul id="chips" class="chips" aria-label="Pantry items"></ul><p id="pempty" class="empty" hidden>Your pantry is empty. Type or record what you have.</p>
   <button class="btn big" id="cook" type="button">🍲 What can I cook?</button>
   <div id="cook-out" aria-live="polite"></div>
@@ -365,6 +399,48 @@ async function pantryView(){
     if(location.hash==='#/pantry')out.innerHTML=cookHTML();
   };
   $('#rec').onclick=ev=>toggleRecord(ev.currentTarget,{kind:'pantry'});
+  receiptUI(render);
+}
+
+/* ---------- pantry: add from a receipt (PDF or photo). Nothing is added until the cook ticks it. ---------- */
+let rcRows=null; // checklist rows of the last receipt, kept while on the pantry page
+function receiptUI(renderChips){
+  const out=$('#rc-out'),seen=()=>{try{return localStorage.getItem('cj_receipt_notice_seen')}catch{return '1'}};
+  const show=()=>{
+    if(!rcRows){out.innerHTML='';return}
+    if(!rcRows.length){out.innerHTML='<div class="card rc"><strong>No food items found on this receipt.</strong><br><small>Nothing was added. Try a clearer photo, or type the items above.</small><div class="row"><button class="btn sec small" id="rc-cancel" type="button">Close</button></div></div>';$('#rc-cancel').onclick=()=>{rcRows=null;show()};return}
+    out.innerHTML=`<div class="card rc"><h2>Found on your receipt</h2><p class="hint">Tick what to add. ❓ means I am not sure, so it starts unticked.</p><ul class="rclist">`+rcRows.map((r,i)=>
+      `<li class="${r.have?'have':''}"><label><input type="checkbox" data-i="${i}" ${r.checked?'checked':''} ${r.have?'disabled':''}> <span class="rn">${esc(r.name)}</span>${amounts.fmtQty({qty_num:r.qty,unit_std:r.unit,approx:r.approx})?` <small class="muted">${esc(amounts.fmtQty({qty_num:r.qty,unit_std:r.unit,approx:r.approx}))}</small>`:''}${r.unsure?' <span title="Not sure">❓</span>':''}${r.have?' <small class="muted">already in your pantry</small>':''}</label></li>`).join('')+
+      `</ul><div class="row"><button class="btn small" id="rc-add" type="button"></button><button class="btn sec small" id="rc-cancel" type="button">Cancel</button></div></div>`;
+    const upd=()=>{const n=rcRows.filter(r=>r.checked&&!r.have).length;const b=$('#rc-add');b.textContent=`Add ${n} to pantry`;b.disabled=!n};
+    upd();
+    $('.rclist').onchange=e=>{const c=e.target.closest('input[data-i]');if(c){rcRows[+c.dataset.i].checked=c.checked;upd()}};
+    $('#rc-cancel').onclick=()=>{rcRows=null;show()};
+    $('#rc-add').onclick=()=>{
+      const added=pantry.add(rcRows.filter(r=>r.checked&&!r.have).map(r=>r.name));
+      rcRows=null;show();renderChips();sound.play('success');
+      out.innerHTML=`<p class="muted" role="status" id="rc-done">Added ${added.length} item${added.length===1?'':'s'} from your receipt.</p>`;
+    };
+  };
+  const run=async f=>{
+    clearError();out.innerHTML='<div class="busy" role="status">Reading your receipt…</div>';
+    try{
+      const r=await receipt.importReceipt(f,pantry.load());
+      rcRows=r.rows.map(x=>({...x,checked:!x.unsure&&!x.have}));
+      sound.play(rcRows.length?'success':'error');
+    }catch(e){rcRows=null;out.innerHTML='';sound.play('error');if(location.hash==='#/pantry')fail(e);return}
+    if(location.hash==='#/pantry')show();
+  };
+  $('#rc-file').onchange=e=>{
+    const f=e.target.files[0];e.target.value='';if(!f)return;
+    clearError();
+    if(!groq.getKey())return showError(keyMissingMsg);
+    if(seen())return run(f);
+    out.innerHTML=`<div class="banner" role="region" aria-label="Privacy"><strong>🔒 Your receipt goes to an online AI service</strong><br><small>The receipt (its text, or a photo) is sent to an online AI service to find the food items. Photos are re-saved without location data first. Do not use a receipt that shows anything private you do not want shared.</small><div class="row"><button class="btn small" id="rc-ok" type="button">Send it</button><button class="btn sec small" id="rc-no" type="button">Cancel</button></div></div>`;
+    $('#rc-ok').onclick=()=>{try{localStorage.setItem('cj_receipt_notice_seen','1')}catch{}run(f)};
+    $('#rc-no').onclick=()=>{out.innerHTML=''};
+  };
+  show();
 }
 
 function settings(root){
@@ -464,7 +540,7 @@ function offerUpdate(worker){
     worker.postMessage('SKIP_WAITING');
   };
 }
-if('serviceWorker'in navigator)navigator.serviceWorker.register('sw.js').then(reg=>{
+if('serviceWorker'in navigator)navigator.serviceWorker.register('sw.js',{scope:'./'}).then(reg=>{
   if(reg.waiting&&navigator.serviceWorker.controller)offerUpdate(reg.waiting);
   reg.addEventListener('updatefound',()=>{
     const w=reg.installing;

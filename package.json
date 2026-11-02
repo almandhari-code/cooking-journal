@@ -1,1 +1,1 @@
-{"name":"cooking-journal","private":true,"scripts":{"test":"playwright test"},"devDependencies":{"@playwright/test":"latest"}}
+{"name":"cooking-journal","private":true,"scripts":{"test":"playwright test"},"devDependencies":{"@playwright/test":"latest","pdfjs-dist":"^6.5.438"}}
