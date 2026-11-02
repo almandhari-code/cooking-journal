@@ -135,3 +135,8 @@ main:has(.dock){padding-bottom:290px}
 .typebox textarea{width:100%;min-height:200px;box-sizing:border-box}
 .receipt{margin:10px 0}
 .rclist{list-style:none;padding:0;margin:8px 0}.rclist li{padding:6px 0}.rclist li.have{opacity:.6}
+
+.banner.lastnote{background:#fff0c9}.banner.newfor{background:#ffd9e6}.banner .x{float:right}
+.markrow{display:flex;gap:8px;justify-content:center;margin:8px 0}.marks{padding-left:18px}
+.why .d-add{color:#1b6b3a}.why .d-rem{color:#8f1630}.why ul{list-style:none;padding:0}.why-ai{font-style:italic}
+.rclist li.lack .rn{color:#8f1630}.miss{font-weight:700}.miss.ok{color:#1b6b3a}

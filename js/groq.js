@@ -153,3 +153,10 @@ export async function readReceipt({text='',images=[]}){
   const txt=stripThink(j.choices?.[0]?.message?.content||'');
   try{return JSON.parse(txt.replace(/^```(?:json)?|```$/g,'').trim())}catch{throw new Error('Could not understand the AI reply for this receipt. Try again or add the items by typing.')}
 }
+
+/* ---------- why was this version better ---------- */
+export const WHY_PROMPT='You compare two versions of a home-cooked dish. Reply with JSON only: {"sentence":string}. One short, plain sentence saying why the better version probably turned out better, based ONLY on the ingredient changes and the cook\'s own notes given. Do not invent anything.';
+export async function explainBetter(payload){
+  const o=await chatJSON(WHY_PROMPT,JSON.stringify(payload));
+  return String(o.sentence||'').trim();
+}

@@ -10,6 +10,7 @@ import * as pantry from './js/pantry.js';
 import * as amounts from './js/amounts.js';
 import * as data from './js/data.js';
 import * as receipt from './js/receipt.js';
+import * as insight from './js/insight.js';
 
 const app=$('#app');
 let recorder=null;       // active Recorder
@@ -41,6 +42,7 @@ async function toggleRecord(btn,meta){
     activeId=p.id;recorder=r;btn.classList.add('on');btn.textContent='Stop';
     document.querySelectorAll('.rec').forEach(b=>{if(b!==btn)b.disabled=true});
     pauseBtn.hidden=false;timer.hidden=false;box.classList.add('live');
+    if(meta.kind==='new'||meta.kind==='append')markUI(r,p.id,box,timer);
     hint.textContent='Recording… tap Pause for a break, Stop when done';
     sound.play('start');
     const tick=setInterval(()=>{if(recorder!==r)return clearInterval(tick);timer.textContent=fmtTime(r.seconds)},250);
@@ -54,6 +56,28 @@ async function toggleRecord(btn,meta){
     if(!await finalizeRecording(r,id))return showError('No audio was captured. Try again.');
     await runPending(id);
   }
+}
+/** F5: "Mark" while recording. Adds {t:seconds,text} to r.marks, saved with the pending session as it happens. */
+function markUI(r,pid,box,timer){
+  r.marks=[];
+  const row=document.createElement('div');row.className='markrow';
+  row.innerHTML='<button class="btn sec small mark" type="button">📍 Mark</button><input class="marktext" maxlength="200" placeholder="Quick note (optional)" aria-label="Quick note for this mark" hidden>';
+  timer.after(row);
+  const btn=$('.mark',row),inp=$('.marktext',row),save=()=>{r.q=r.q.then(()=>db.patchPending(pid,{marks:r.marks.map(m=>({...m}))})).catch(()=>{})};
+  btn.onclick=()=>{
+    r.marks.push({t:r.seconds,text:''});save();
+    btn.textContent=`📍 Mark (${r.marks.length})`;inp.value='';inp.hidden=false;inp.focus();
+    sound.play('tap');
+  };
+  inp.onchange=()=>{r.marks.at(-1).text=inp.value.trim();save();inp.hidden=true};
+  inp.onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();inp.blur()}};
+}
+const marksHTML=(marks,id='')=>marks?.length?`<ul class="marks"${id?` id="${id}"`:''}>${marks.map(m=>`<li><b>${fmtTime(m.t)}</b>${m.text?' '+esc(m.text):''}</li>`).join('')}</ul>`:'';
+/** F4: banner with her last "next time" note for a dish (by name). Empty string when there is none. */
+async function lastNoteHTML(name){
+  const d=name&&await db.findDish(name);if(!d)return '';
+  const n=insight.lastNote(await db.listVersions(d.id));if(!n)return '';
+  return `<div class="banner lastnote" id="lastnote" role="note">📝 Last time (v${n.n}, ${stars(n.rating)}): “${esc(n.notes)}”</div>`;
 }
 /** Stop a recorder and store its final parts in its pending session. Returns the parts, or null if there was no audio. */
 async function finalizeRecording(r,id){
@@ -99,15 +123,15 @@ async function finishPending(p,parts,transcript){
     const r=await groq.extractRecipe(transcript);
     if(into){
       Object.assign(draft,db.mergeRecipe(draft,r),{name:draft.name||r.dish,transcript:[draft.transcript,transcript].join('\n\n'),
-        parts:[...draft.parts,...parts],long:draft.long||p.long,pendingIds:[...draft.pendingIds,p.id]});
+        parts:[...draft.parts,...parts],long:draft.long||p.long,pendingIds:[...draft.pendingIds,p.id],marks:[...(draft.marks||[]),...(p.marks||[])]});
       sound.play('success');
-    }else draft={name:r.dish,ingredients:r.ingredients,steps:r.steps,transcript,parts,long:p.long,pendingIds:[p.id]};
+    }else{draft={name:newFor?.name||r.dish,ingredients:r.ingredients,steps:r.steps,transcript,parts,long:p.long,pendingIds:[p.id],marks:p.marks||[]};newFor=null}
     persistDraft();
     if(location.hash==='#/review')await route();else location.hash='#/review';
   }else if(p.kind==='append'){
     busy('Adding to your dish…');
     const recipe=await groq.extractRecipe(transcript);
-    await db.appendToVersion(p.targetId,{parts,transcript,recipe});
+    await db.appendToVersion(p.targetId,{parts,transcript,recipe,marks:p.marks||[]});
     await db.deletePending(p.id);
     const res=game.award('append',{long:p.long});
     await route();celebrate(res);
@@ -194,6 +218,7 @@ $('#install').onclick=()=>{
 const dishStatus=d=>d.status==='finished'?'finished':'planning';
 const dishCard=d=>`<a class="card dishcard" href="#/dish/${d.id}"><strong>${esc(d.name)}</strong> <span class="status ${dishStatus(d)}">${d.status==='finished'?'✅ Finished':'📝 Planning'}</span><br><small>${d.versionCount} version${d.versionCount>1?'s':''}</small></a>`;
 let recMode=null; // 'speak' | 'type'
+let newFor=null; // {id,name}: the cook chose "New version" on a dish page
 const TYPED_MAX=60000;
 async function typedRecipe(text){
   clearError();
@@ -201,29 +226,40 @@ async function typedRecipe(text){
   busy('Extracting recipe…');
   try{
     const r=await groq.extractRecipe(text);
-    draft={name:r.dish,ingredients:r.ingredients,steps:r.steps,transcript:text,parts:[],long:text.length>1500,pendingIds:[],typed:true};
+    draft={name:newFor?.name||r.dish,ingredients:r.ingredients,steps:r.steps,transcript:text,parts:[],long:text.length>1500,pendingIds:[],typed:true,marks:[]};newFor=null;
     persistDraft();await db.clearTyped();
     sound.play('success');location.hash='#/review';
   }catch(e){sound.play('error');await home();fail(e)} // the text stays in the box
 }
 async function home(){
-  const dishes=(await db.listDishes()).slice(0,3);
+  const all=await db.listDishes(),dishes=all.slice(0,3);
   const saved=await db.loadTyped().catch(()=>'');
   if(recMode==null)recMode=saved?'type':'speak';
   const seg=`<div class="seg" role="group" aria-label="How do you want to add a dish?"><button type="button" id="m-speak" aria-pressed="${recMode==='speak'}">🎙️ Speak</button><button type="button" id="m-type" aria-pressed="${recMode==='type'}">⌨️ Type</button></div>`;
   const input=recMode==='type'
     ?`<div class="typebox"><label for="typed">Paste or type what you cooked</label><textarea id="typed" maxlength="${TYPED_MAX}" placeholder="e.g. Today I made machboos: 2 cups rice, a chicken, onions…" autocomplete="off">${esc(saved)}</textarea><small class="hint" id="typed-count"></small><div class="row"><button class="btn" id="typed-go" type="button">Make recipe</button><button class="btn sec" id="typed-clear" type="button">Clear</button></div></div>`
     :`<div class="bigrec">${recBox('rec','Record','Tap to start, tap again to stop. You can pause any time.')}</div>`;
-  app.innerHTML=hero()+seg+input+`
+  const nf=newFor?`<div class="banner newfor" id="newfor">➕ New version of <strong>${esc(newFor.name)}</strong> <button class="x" id="newfor-x" type="button" aria-label="Cancel new version">✕</button></div>`:'';
+  app.innerHTML=hero()+nf+`<div id="lastnote-box">${newFor?await lastNoteHTML(newFor.name):''}</div>`+seg+input+`
   <h2>Recent dishes <a class="link more" href="#/dishes">See all</a></h2>`+(dishes.length?`<div class="recent">${dishes.map(dishCard).join('')}</div>`
     :`<p class="empty">No dishes yet. Tap Record and describe what you cooked.</p>`);
   if(!groq.getKey())showError(keyMissingMsg);
+  if($('#newfor-x'))$('#newfor-x').onclick=()=>{newFor=null;home()};
   $('#m-speak').onclick=()=>{recMode='speak';home()};
   $('#m-type').onclick=()=>{recMode='type';home()};
   if(recMode==='type'){
     const t=$('#typed'),cnt=$('#typed-count'),upd=()=>{cnt.textContent=t.value.length?`${t.value.length} characters`:''};
     upd();
-    t.oninput=()=>{upd();db.saveTyped(t.value).catch(()=>{})};
+    let shown=newFor?.id;
+    t.oninput=async()=>{
+      upd();db.saveTyped(t.value).catch(()=>{});
+      if(newFor)return; // the banner for the chosen dish stays
+      const low=t.value.toLowerCase(),hit=all.filter(d=>d.name.length>=3&&low.includes(d.name.toLowerCase())).sort((a,b)=>b.name.length-a.name.length)[0];
+      if((hit?.id)===shown)return;
+      shown=hit?.id;const html=hit?await lastNoteHTML(hit.name):'';
+      if(shown===hit?.id&&$('#lastnote-box'))$('#lastnote-box').innerHTML=html;
+    };
+    if(t.value)t.oninput();
     $('#typed-clear').onclick=async()=>{t.value='';upd();await db.clearTyped();t.focus()};
     $('#typed-go').onclick=()=>{
       const v=t.value.trim();
@@ -260,7 +296,8 @@ function review(){
   if(!draft){location.hash='#/';return}
   const d=draft;
   app.innerHTML=`<h1>Review recipe</h1>
-  <label for="name">Dish name</label><input id="name" value="${esc(d.name)}">
+  <label for="name">Dish name</label><input id="name" value="${esc(d.name)}"><div id="lastnote-box"></div>
+  ${d.marks?.length?`<h2>Your marks 📍</h2>${marksHTML(d.marks,'marks')}`:''}
   <h2>Ingredients</h2><div id="ings"></div>
   <button class="btn sec small" id="add-ing" type="button">+ Add ingredient</button>
   <h2>Steps</h2><div id="steps"></div>
@@ -275,6 +312,9 @@ function review(){
   steps.innerHTML=d.steps.map(stepRow).join('');
   $('#add-ing').onclick=()=>ings.insertAdjacentHTML('beforeend',ingRow({name:'',amount:'',unit:''}));
   $('#add-step').onclick=()=>steps.insertAdjacentHTML('beforeend',stepRow(''));
+  let ln=0;
+  const showLast=async()=>{const n=++ln,h=await lastNoteHTML($('#name')?.value);if(n===ln&&$('#lastnote-box'))$('#lastnote-box').innerHTML=h};
+  showLast();$('#name').addEventListener('input',showLast);
   const edit=()=>{if(draft===d&&$('#name')){syncDraft();persistDraft()}};
   app.oninput=edit;
   app.onclick=e=>{if(e.target.classList.contains('x')){e.target.parentElement.remove();edit()}};
@@ -283,13 +323,68 @@ function review(){
   $('#save').onclick=async()=>{
     syncDraft();
     if(!d.name)return showError('Please enter a dish name.');
-    const v=await db.saveVersion({name:d.name,ingredients:amounts.enrichAll(d.ingredients),steps:d.steps,transcript:d.transcript,parts:d.parts,typed:!!d.typed});
+    const v=await db.saveVersion({name:d.name,ingredients:amounts.enrichAll(d.ingredients),steps:d.steps,transcript:d.transcript,parts:d.parts,typed:!!d.typed,marks:d.marks||[]});
     await Promise.all(d.pendingIds.map(db.deletePending));await db.clearDraft();
     data.persist();
     const res=game.award('dish',{newDish:v.newDish,n:v.n,long:d.long});
-    draft=null;clearError();location.hash='#/version/'+v.id;celebrate(res);
+    draft=null;clearError();
+    const used=insight.usedFromPantry(v.ingredients,pantry.load());
+    if(used.length)useUp(v,res,used);
+    else{location.hash='#/version/'+v.id;celebrate(res)}
   };
 }
+
+/** F3: after saving, offer to remove pantry items that went into the dish. Nothing is removed unless ticked. */
+function useUp(v,res,used){
+  app.onclick=app.oninput=null;
+  app.innerHTML=`<h1>Saved! 🎉</h1><div class="card rc"><h2>Use up from pantry?</h2><p class="hint">Tick what you used up. Only ticked items are removed from your pantry.</p><ul class="rclist" id="useup">${used.map((p,i)=>`<li><label><input type="checkbox" data-i="${i}"> <span class="rn">${esc(p)}</span></label></li>`).join('')}</ul>
+  <div class="row"><button class="btn small" id="useup-go" type="button"></button><button class="btn sec small" id="useup-skip" type="button">Skip</button></div></div>`;
+  const upd=()=>{const n=app.querySelectorAll('#useup input:checked').length;$('#useup-go').textContent=`Remove ${n} from pantry`;$('#useup-go').disabled=!n};
+  upd();$('#useup').onchange=upd;
+  const done=()=>{location.hash='#/version/'+v.id;celebrate(res)};
+  $('#useup-go').onclick=()=>{[...app.querySelectorAll('#useup input:checked')].forEach(c=>pantry.remove(used[+c.dataset.i]));sound.play('success');done()};
+  $('#useup-skip').onclick=done;
+}
+
+/** F1: "Why was vN better?" card. The AI sentence is cached on the version; offline or no key = card without it. */
+async function whyCard(w){
+  const q=i=>esc([amounts.fmtQty(i)||[i.amount,i.unit].filter(Boolean).join(' '),i.name].filter(Boolean).join(' '));
+  const {added,removed,changed}=w.diff;
+  const rows=[...added.map(i=>`<li class="d-add">+ ${q(i)}</li>`),...removed.map(i=>`<li class="d-rem">− ${q(i)}</li>`),
+    ...changed.map(c=>`<li class="d-chg">~ ${esc(c.to.name)}: ${esc(amounts.fmtQty(c.from)||'?')} → ${esc(amounts.fmtQty(c.to)||'?')}</li>`)];
+  const note=String(w.best.after.notes||'').trim();
+  const cached=w.best.why?.key===w.key?w.best.why.text:'';
+  return `<section class="panel why" id="why" aria-label="Why was v${w.best.n} better"><h2>Why was v${w.best.n} better? ✨</h2>
+    <p class="muted">v${w.best.n} got ${stars(w.best.after.rating)}${w.prev.after?`, v${w.prev.n} got ${stars(w.prev.after.rating)}`:`, v${w.prev.n} was not rated`}.</p>
+    ${rows.length?`<ul id="why-diff">${rows.join('')}</ul>`:'<p class="muted" id="why-diff">Same ingredients and amounts.</p>'}
+    ${note?`<p id="why-note">Your note: “${esc(note)}”</p>`:''}<p id="why-ai" class="why-ai">${esc(cached)}</p></section>`;
+}
+async function whyAI(w,dishName,dishId){
+  if(w.best.why?.key===w.key||!groq.getKey())return;
+  try{
+    const sentence=await groq.explainBetter({dish:dishName,better:{version:w.best.n,rating:w.best.after.rating,notes:w.best.after.notes||''},previous:{version:w.prev.n,rating:w.prev.after?.rating??null},
+      changes:{added:w.diff.added.map(i=>i.name),removed:w.diff.removed.map(i=>i.name),changed:w.diff.changed.map(c=>({name:c.to.name,from:amounts.fmtQty(c.from),to:amounts.fmtQty(c.to)}))}});
+    if(!sentence)return;
+    await db.patchVersion(w.best.id,{why:{key:w.key,text:sentence}});
+    if(location.hash==='#/dish/'+dishId&&$('#why-ai'))$('#why-ai').textContent=sentence;
+  }catch{} // offline / rate limit: just no sentence
+}
+
+/** F2: checklist for cooking the best version, with grams and what the pantry is missing. */
+async function cookView(id){
+  const d=await db.getDish(+id);
+  const v=d&&insight_best(await db.listVersions(d.id));
+  if(!v){location.hash='#/dishes';return}
+  const ings=amounts.enrichAll(v.ingredients),miss=new Set(pantry.missing(ings.map(i=>i.name)));
+  app.innerHTML=`<h1>Cook ${esc(d.name)} <small class="muted">v${v.n}${v.after?' · '+stars(v.after.rating):''}</small></h1>
+  <a class="link" href="#/dish/${d.id}">Back to ${esc(d.name)}</a>
+  <div id="cook-miss">${miss.size?`<p class="miss">Not in your pantry: ${[...miss].map(esc).join(', ')}</p>`:'<p class="miss ok">Your pantry has everything! 🎉</p>'}</div>
+  <h2>Ingredients</h2><ul class="rclist" id="cl-ings">${ings.map(i=>{
+    const g=amounts.fmtQty(i),has=!miss.has(i.name);
+    return `<li class="${has?'':'lack'}"><label><input type="checkbox"> <span class="rn">${esc(i.name)}</span> <small class="muted">${esc(g||[i.amount,i.unit].filter(Boolean).join(' '))}</small>${has?'':' <span class="flag" title="Not in your pantry">🛒 missing</span>'}</label></li>`}).join('')||'<li class="muted">No ingredients saved.</li>'}</ul>
+  <h2>Steps</h2><ol class="rclist" id="cl-steps">${v.steps.map(s=>`<li><label><input type="checkbox"> ${esc(s)}</label></li>`).join('')||'<li class="muted">None</li>'}</ol>`;
+}
+const insight_best=pantry.bestVersion;
 
 async function dish(id){
   const d=await db.getDish(+id);
@@ -301,11 +396,16 @@ async function dish(id){
     const diff=rated.at(-1).after.rating-rated[0].after.rating;
     trend=diff>0?`Up ${diff}★ since v${rated[0].n}! Keep going 🎉`:diff<0?`Down ${-diff}★ since v${rated[0].n}. Time to tweak 🔧`:`Steady at ${rated.at(-1).after.rating}★ since v${rated[0].n}.`;
   }else if(rated.length===1)trend='One rating so far. Cook it again to see a trend!';
+  const w=insight.whyBetter(vs);
   app.innerHTML=`<h1>${esc(d.name)}</h1>
+  <div class="row"><a class="btn small" id="cook-best" href="#/cook/${d.id}">🍳 Cook my best version</a><button class="btn sec small" id="new-ver" type="button">➕ New version</button></div>
+  ${w?await whyCard(w):''}
   <section class="panel" aria-label="Progress"><h2>Progress ⭐</h2>${progressChart(vs)}<p class="trend" id="trend">${trend}</p></section>
   <h2>Versions</h2>`+vs.slice().reverse().map(v=>`
     <a class="card" href="#/version/${v.id}"><strong>Version ${v.n}</strong>
     <br><small>${new Date(v.createdAt).toLocaleString()}${v.after?` · <span class="stars">${stars(v.after.rating)}</span>`:''}</small></a>`).join('');
+  $('#new-ver').onclick=()=>{newFor={id:d.id,name:d.name};recMode='speak';location.hash='#/'};
+  if(w)whyAI(w,d.name,d.id);
 }
 
 function diffHTML(prev,v){
@@ -330,6 +430,7 @@ async function version(id){
   <h2>Original recording</h2>${hasAudio?audios(v.parts||[v.audio],'Recording')+'<button class="btn sec small" id="del-audio" type="button">Delete recording, keep recipe</button>':`<p class="muted" id="audio-gone">${v.typed&&!v.audioDeleted?'This recipe was typed in, so there is no recording. The text is under Transcript below.':'Recording deleted. The recipe and transcript are kept.'}</p>`}
   <h2>Ingredients</h2><ul>${v.ingredients.map(i=>`<li>${esc([i.amount,i.unit,i.name].filter(Boolean).join(' '))}${i.qty_num!=null&&i.qty_num!=='' ?` <small class="muted qty">(${esc(amounts.fmtQty(i))})</small>`:''}</li>`).join('')||'<li class="muted">None</li>'}</ul>
   ${diffHTML(prev,v)}
+  ${v.marks?.length?`<h2>Your marks 📍</h2>${marksHTML(v.marks,'marks')}`:''}
   <h2>Steps</h2><ol>${v.steps.map(s=>`<li>${esc(s)}</li>`).join('')||'<li class="muted">None</li>'}</ol>
   <details><summary>Transcript</summary><p class="muted transcript">${esc(v.transcript)}</p></details>
   <div class="after"><h2>Still cooking?</h2>${recBox('add-more','Add to this dish','Add more ingredients or steps to this version')}</div>
@@ -501,6 +602,7 @@ async function route(keep){
     else if(page==='me'||page==='settings')await meView();
     else if(page==='pantry')await pantryView();
     else if(page==='dish')await dish(arg);
+    else if(page==='cook')await cookView(arg);
     else if(page==='version')afterDraft&&afterDraft.versionId===+arg?afterReview():await version(arg);
     else await home();
   }catch(e){fail(e)}

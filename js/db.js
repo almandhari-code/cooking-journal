@@ -31,9 +31,16 @@ export async function listVersions(dishId){
 }
 export const getDish=async id=>wrap((await store('dishes')).get(id));
 export const getVersion=async id=>wrap((await store('versions')).get(id));
+/** Dish with this name (case-insensitive), or undefined. */
+export async function findDish(name){return wrap((await store('dishes')).index('key').get(String(name||'').trim().toLowerCase()))}
+/** Merge fields into a saved version (e.g. a cached AI sentence). */
+export async function patchVersion(id,fields){
+  const v=await getVersion(id);if(!v)return null;
+  Object.assign(v,fields);await wrap((await store('versions','readwrite')).put(v));return v;
+}
 
 /** Save a new version; creates the dish if the (case-insensitive) name is new. */
-export async function saveVersion({name,ingredients,steps,transcript,parts,typed=false}){
+export async function saveVersion({name,ingredients,steps,transcript,parts,typed=false,marks=[]}){
   name=name.trim();
   const key=name.toLowerCase();
   let dish=await wrap((await store('dishes')).index('key').get(key));
@@ -45,6 +52,7 @@ export async function saveVersion({name,ingredients,steps,transcript,parts,typed
   const n=(await listVersions(dish.id)).length+1;
   const v={dishId:dish.id,n,createdAt:Date.now(),ingredients,steps,transcript,audio:parts[0],parts,after:null};
   if(typed)v.typed=true;
+  if(marks.length)v.marks=marks;
   v.id=await wrap((await store('versions','readwrite')).add(v));
   return {...v,newDish};
 }
@@ -68,12 +76,13 @@ export function mergeRecipe(base,add){
   return {ingredients,steps};
 }
 /** "Add to this dish": append a later recording to a saved version. */
-export async function appendToVersion(id,{parts,transcript,recipe}){
+export async function appendToVersion(id,{parts,transcript,recipe,marks=[]}){
   const v=await getVersion(id);
   Object.assign(v,mergeRecipe(v,recipe));
   v.parts=[...(v.parts||[v.audio]).filter(Boolean),...parts];
   v.transcript=[v.transcript,transcript].filter(Boolean).join('\n\n');
   v.appends=(v.appends||0)+1;
+  if(marks.length)v.marks=[...(v.marks||[]),...marks];
   await wrap((await store('versions','readwrite')).put(v));
   return v;
 }
@@ -81,7 +90,7 @@ export async function appendToVersion(id,{parts,transcript,recipe}){
 /* ---------- pending sessions: audio is saved here the moment it exists, removed only after the result is saved ---------- */
 /** kind: 'new' | 'append' | 'after' | 'pantry'. status: 'recording' | 'new' | 'queued' | 'error' */
 export async function createPending(o){
-  const p={kind:'new',targetId:null,intoDraft:false,parts:[],live:null,texts:[],status:'recording',error:'',createdAt:Date.now(),...o};
+  const p={kind:'new',targetId:null,intoDraft:false,parts:[],live:null,texts:[],marks:[],status:'recording',error:'',createdAt:Date.now(),...o};
   p.id=await wrap((await store('pending','readwrite')).add(p));
   return p;
 }
