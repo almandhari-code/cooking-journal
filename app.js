@@ -17,6 +17,7 @@ let activeId=null;       // pending-session id of the recording in progress
 const running=new Set(); // pending ids being processed right now
 const urls=[];
 
+groq.onStatus(m=>{const el=$('#netstatus');el.textContent=m;el.hidden=!m});
 const fail=e=>showError(e.message==='NO_KEY'?keyMissingMsg:esc(e.message));
 const busy=msg=>{app.innerHTML=`<div class="busy" role="status">${esc(msg)}</div>`};
 

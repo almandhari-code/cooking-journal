@@ -66,7 +66,8 @@ test('what can I cook: best version first, missing shown, then LLM ideas',async(
 });
 
 test('missing ingredients shown for near-fit dish; ideas error keeps saved results',async({page})=>{
-  await clean(page);await page.route('**/chat/completions',r=>r.fulfill({status:429,json:{error:{message:'slow down'}}}));
+  await clean(page);await page.addInitScript(()=>{window.CJ_MAX_TRIES=1}); // no backoff wait, check the final error
+  await page.route('**/chat/completions',r=>r.fulfill({status:429,json:{error:{message:'slow down'}}}));
   await page.goto('/');await seed(page);
   await page.evaluate(()=>localStorage.setItem('cj_pantry',JSON.stringify(['rice','onion'])));
   await page.goto('/#/pantry');await page.click('#cook');

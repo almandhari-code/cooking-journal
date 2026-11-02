@@ -3,19 +3,43 @@ export const MODELS=['openai/gpt-oss-120b','qwen/qwen3.8-27b'];
 export const getKey=()=>localStorage.getItem('groq_api_key')||'';
 export const setKey=k=>k?localStorage.setItem('groq_api_key',k):localStorage.removeItem('groq_api_key');
 
+let statusFn=()=>{};
+/** The UI registers here to show "Groq is busy, retrying in 5s…" (empty string clears it). */
+export const onStatus=f=>{statusFn=f||(()=>{})};
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+/** Seconds to wait after a 429: the retry-after header (seconds or a date) if present, else 2,4,8,16… capped at 60. */
+export function backoffSeconds(headers,attempt){
+  const ra=headers?.get?.('retry-after');
+  let s=ra==null||ra===''?NaN:Number(ra);
+  if(Number.isNaN(s)&&ra)s=(Date.parse(ra)-Date.now())/1000;
+  if(Number.isNaN(s))s=2**attempt;
+  return Math.min(60,Math.max(1,Math.ceil(s)));
+}
+
 async function call(path,opts){
   const key=getKey();
   if(!key)throw new Error('NO_KEY');
-  let r;
-  try{r=await fetch(BASE+path,{...opts,headers:{Authorization:'Bearer '+key,...opts.headers}})}
-  catch{throw Object.assign(new Error('Network error: could not reach Groq. Check your connection and try again.'),{network:true})}
-  if(!r.ok){
-    let m='';try{m=(await r.json()).error?.message||''}catch{}
-    if(r.status===401)throw Object.assign(new Error('Groq rejected the API key (401). Check it in Settings.'),{status:401});
-    if(r.status===429)throw Object.assign(new Error('Groq rate limit reached (429). Wait a moment and try again.'),{status:429});
-    const e=new Error(`Groq API error (${r.status})${m?': '+m:''}`);e.status=r.status;throw e;
+  const max=+window.CJ_MAX_TRIES||5;
+  for(let attempt=1;;attempt++){
+    let r;
+    try{r=await fetch(BASE+path,{...opts,headers:{Authorization:'Bearer '+key,...opts.headers}})}
+    catch{statusFn('');throw Object.assign(new Error('Network error: could not reach Groq. Check your connection and try again.'),{network:true})}
+    if(r.status===429&&attempt<max){ // rate limited: wait as told and try again, no taps needed
+      for(let left=backoffSeconds(r.headers,attempt);left>0;left--){
+        statusFn(`Groq is busy (rate limit). Trying again in ${left}s… (attempt ${attempt+1} of ${max})`);
+        await sleep(1000);
+      }
+      statusFn('');continue;
+    }
+    statusFn('');
+    if(!r.ok){
+      let m='';try{m=(await r.json()).error?.message||''}catch{}
+      if(r.status===401)throw Object.assign(new Error('Groq rejected the API key (401). Check it in Settings.'),{status:401});
+      if(r.status===429)throw Object.assign(new Error('Groq rate limit reached (429). Groq is still busy after several tries.'),{status:429});
+      const e=new Error(`Groq API error (${r.status})${m?': '+m:''}`);e.status=r.status;throw e;
+    }
+    return r.json();
   }
-  return r.json();
 }
 
 export const OMANI_VOCAB=['machboos','bzar','shuwa','harees','mashuai','laban','qahwa','halwa','kahwa','maqboos','saloona','mashkak','khubz','dates','cardamom','saffron','loomi'];

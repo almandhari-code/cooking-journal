@@ -215,3 +215,41 @@ test('5c: CJ_CHUNK_MS also read from localStorage cj_chunk_ms',async({page})=>{
   await seed(page);await page.goto('/');
   expect(await page.evaluate(async()=>{localStorage.cj_chunk_ms='1234';const {Recorder}=await import('/js/recorder.js');return new Recorder().chunkMs})).toBe(1234);
 });
+
+test('6: 429,429,200 succeeds with no taps; waits per retry-after; status is visible',async({page})=>{
+  await seed(page);
+  let n=0;const at=[];
+  await page.route('**/audio/transcriptions',r=>{at.push(Date.now());++n<=2?r.fulfill({status:429,headers:{'retry-after':'1'},json:{error:{message:'slow'}}}):r.fulfill({json:{text:'rice please'}})});
+  await chatOK(page);
+  await page.goto('/');
+  await rec(page);                                      // the only interaction
+  await expect(page.locator('#netstatus')).toContainText(/busy.*Trying again in/);
+  await expect(page.locator('#name')).toHaveValue('Machboos',{timeout:15000});
+  expect(n).toBe(3);
+  expect(at[1]-at[0]).toBeGreaterThanOrEqual(900);      // honoured retry-after: 1
+  expect(at[2]-at[1]).toBeGreaterThanOrEqual(900);
+  await expect(page.locator('#netstatus')).toBeHidden();
+  await expect(page.locator('#error')).toBeHidden();
+  expect(await page.evaluate(()=>import('/js/groq.js').then(g=>[g.backoffSeconds(new Headers(),1),g.backoffSeconds(new Headers(),3),g.backoffSeconds(new Headers({'retry-after':'7'}),1),g.backoffSeconds(new Headers({'retry-after':'999'}),1)]))).toEqual([2,8,7,60]);
+});
+
+test('6b: still 429 after all tries -> queued in IndexedDB, retried automatically later, text kept',async({page})=>{
+  await seed(page);
+  await page.addInitScript(()=>{window.CJ_MAX_TRIES=2;window.CJ_QUEUE_MS=1500});
+  let ok=false,calls=0;
+  await page.route('**/audio/transcriptions',r=>{calls++;ok?r.fulfill({json:{text:'rice please'}}):r.fulfill({status:429,headers:{'retry-after':'1'},json:{error:{message:'slow'}}})});
+  await chatOK(page);
+  await page.goto('/');
+  await rec(page);
+  await expect(page.locator('#error')).toContainText('rate limit');
+  await expect(page.locator('#pending')).toContainText('retry automatically');
+  expect((await liveOf(page)).status).toBe('queued');
+  expect(calls).toBe(2);
+  ok=true;                                              // limit lifts; the queue notices on its own
+  await expect.poll(async()=>(await liveOf(page)).status,{timeout:15000}).toBe('new');
+  const callsAfter=calls;
+  expect(await page.evaluate(async()=>(await (await import('/js/db.js')).listPending())[0].texts)).toEqual(['rice please']);
+  await page.click('#pending .retry');                  // finishing needs no new Whisper call
+  await expect(page.locator('#name')).toHaveValue('Machboos');
+  expect(calls).toBe(callsAfter);
+});
