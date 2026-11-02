@@ -22,34 +22,42 @@ export class Recorder{
       if(e.name==='NotFoundError')throw new Error('No microphone was found on this device.');
       throw new Error('Could not start the microphone: '+e.message);
     }
-    this.rec=this._begin();
+    this.rec=this.cur=this._begin();
     this.segMs=0;this.last=performance.now();
     this.timer=setInterval(()=>this._tick(),200);
   }
   _begin(){
     const mime=pickMime(),chunks=[];
     const rec=new MediaRecorder(this.stream,{...(mime?{mimeType:mime}:{}),audioBitsPerSecond:48000});
-    rec.ondataavailable=e=>e.data.size&&chunks.push(e.data);
+    rec.chunks=chunks;
+    rec.ondataavailable=e=>{if(e.data.size){chunks.push(e.data);this._notify()}};
     rec.finished=new Promise(res=>{rec.onstop=()=>{
-      if(chunks.length){this.parts.push(new Blob(chunks,{type:rec.mimeType||'audio/webm'}));this.onChange?.(this.parts.slice())}
-      res();
+      if(chunks.length)this.parts.push(new Blob(chunks,{type:rec.mimeType||'audio/webm'}));
+      this._notify();res();
     }});
     rec.start();
     return rec;
   }
+  /** Tell the owner what is safe to store: finished parts plus the partial segment still being recorded. */
+  _notify(){
+    const c=this.cur;
+    this.onChange?.(this.parts.slice(),c&&c.chunks.length?new Blob(c.chunks,{type:c.mimeType||'audio/webm'}):null);
+  }
+  /** Ask the browser to hand over audio recorded so far (page is being hidden or closed). */
+  flush(){const c=this.cur;if(c&&c.state!=='inactive')try{c.requestData()}catch{}}
   _tick(){
     const now=performance.now(),dt=now-this.last;this.last=now;
     if(this.paused)return;
     this.ms+=dt;this.segMs+=dt;
     if(this.segMs>=this.chunkMs){ // start the next chunk first so no audio is lost, then close the old one
-      const old=this.rec;this.rec=this._begin();this.segMs=0;old.stop();
+      const old=this.rec;this.rec=this.cur=this._begin();this.segMs=0;old.stop();
     }
   }
   pause(){if(this.paused)return;this.rec.pause();this.paused=true;this.pauses++}
   resume(){if(!this.paused)return;this.rec.resume();this.paused=false;this.last=performance.now()}
   async stop(){
     clearInterval(this.timer);
-    const rec=this.rec;
+    const rec=this.rec;this.cur=null;
     if(rec.state!=='inactive')rec.stop();
     await rec.finished;
     this.stream.getTracks().forEach(t=>t.stop());

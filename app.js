@@ -33,7 +33,7 @@ async function toggleRecord(btn,meta){
     // the audio goes to IndexedDB as soon as each chunk exists, so nothing depends on the network or this page staying open
     const p=await db.createPending(meta);
     r.q=Promise.resolve();
-    r.onChange=(parts)=>{r.q=r.q.then(()=>db.patchPending(p.id,{parts})).catch(()=>{})};
+    r.onChange=(parts,live)=>{r.q=r.q.then(()=>db.patchPending(p.id,{parts,live})).catch(()=>{})};
     activeId=p.id;recorder=r;btn.classList.add('on');btn.textContent='Stop';
     document.querySelectorAll('.rec').forEach(b=>{if(b!==btn)b.disabled=true});
     pauseBtn.hidden=false;timer.hidden=false;box.classList.add('live');
@@ -343,6 +343,17 @@ async function route(keep){
   }catch(e){fail(e)}
   renderPending();
 }
-addEventListener('hashchange',()=>route());
+/* leaving mid-recording asks first; whatever was recorded is kept as a pending session either way */
+let curHash=location.hash;
+addEventListener('hashchange',()=>{
+  if(location.hash===curHash)return;
+  if(recorder&&!confirm('You are recording. Leave this page? Your audio so far is saved and you can process it later.')){history.replaceState(null,'',curHash||'#/');return}
+  curHash=location.hash;route();
+});
+/* a hidden or closing page may never get another chance: ask the recorder to hand over its audio now and store it */
+const flushRecording=()=>recorder?.flush();
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden')flushRecording()});
+addEventListener('pagehide',flushRecording);
+addEventListener('beforeunload',flushRecording);
 route().then(async()=>{if((await db.listPending()).some(p=>p.status==='queued'))scheduleDrain()});
 if('serviceWorker'in navigator)navigator.serviceWorker.register('sw.js').catch(()=>{});

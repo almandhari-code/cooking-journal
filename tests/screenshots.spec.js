@@ -25,6 +25,7 @@ test('capture home, recording, dish progress',async({page},info)=>{
   await page.click('.pause');
   await page.waitForTimeout(300);
   await page.screenshot({path:'screenshots/recording.png'});
+  page.on('dialog',d=>d.accept()); // leaving mid-recording now asks first
 
   await page.goto('/#/');
   await page.locator('a.card',{hasText:'Machboos'}).click();
