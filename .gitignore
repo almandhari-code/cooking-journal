@@ -2,3 +2,5 @@ node_modules
 test-results
 tests/screenshots
 .claude-run.log
+SUMMARY*.md
+BRIEF*.md
