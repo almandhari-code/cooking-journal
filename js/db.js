@@ -2,11 +2,12 @@ const DB='cooking-journal';
 let dbp;
 function open(){
   return dbp??=new Promise((res,rej)=>{
-    const r=indexedDB.open(DB,2);
+    const r=indexedDB.open(DB,3);
     r.onupgradeneeded=()=>{
       const d=r.result,has=n=>d.objectStoreNames.contains(n);
       if(!has('dishes'))d.createObjectStore('dishes',{keyPath:'id',autoIncrement:true}).createIndex('key','key',{unique:true});
       if(!has('versions'))d.createObjectStore('versions',{keyPath:'id',autoIncrement:true}).createIndex('dishId','dishId');
+      if(!has('meta'))d.createObjectStore('meta');
       if(!has('pending'))d.createObjectStore('pending',{keyPath:'id',autoIncrement:true});
     };
     r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error);
@@ -103,13 +104,25 @@ export async function dumpAll(){
   for(const n of STORES)out[n]=await wrap((await store(n)).getAll());
   return out;
 }
-/** Replace everything in IndexedDB with the given rows (ids are kept so links between dishes and versions survive). */
+/** Replace dishes and versions with the given rows (ids are kept so links survive).
+ *  Pending sessions are never cleared: the ones here are kept, and backup ones are added (same id+createdAt = same session, skipped; otherwise a fresh id). */
 export async function restoreAll(rows){
   const t=(await open()).transaction(STORES,'readwrite');
   const done=new Promise((res,rej)=>{t.oncomplete=res;t.onerror=()=>rej(t.error);t.onabort=()=>rej(t.error)});
-  for(const n of STORES){const st=t.objectStore(n);st.clear();for(const r of rows[n]||[])st.put(r)}
+  for(const n of ['dishes','versions']){const st=t.objectStore(n);st.clear();for(const r of rows[n]||[])st.put(r)}
+  const ps=t.objectStore('pending');
+  const have=await wrap(ps.getAll());
+  for(const r of rows.pending||[]){
+    if(have.some(h=>h.id===r.id&&h.createdAt===r.createdAt))continue;
+    const {id,...rest}=r;ps.add(rest);
+  }
   await done;
 }
+
+/* ---------- review draft: survives reloads until it is saved or discarded ---------- */
+export async function saveDraft(d){await wrap((await store('meta','readwrite')).put(d,'draft'))}
+export const loadDraft=async()=>(await wrap((await store('meta')).get('draft')))||null;
+export async function clearDraft(){await wrap((await store('meta','readwrite')).delete('draft'))}
 
 /** Privacy: remove all audio from a version (and its after-eating note), keep recipe, transcript and rating. */
 export async function deleteAudio(id){

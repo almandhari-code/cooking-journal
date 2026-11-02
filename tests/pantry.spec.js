@@ -1,4 +1,5 @@
 const {test,expect}=require('@playwright/test');
+require('fs').mkdirSync(process.env.SHOTS_DIR||'test-results/screenshots',{recursive:true});
 
 async function mock(page,log){
   await page.route('**/audio/transcriptions',r=>r.fulfill({json:{text:'I have rice, onions and some saffron'}}));
@@ -83,10 +84,10 @@ test('tab bar links to pantry; screenshots',async({page},info)=>{
   await expect(page).toHaveURL(/#\/pantry/);
   await expect(page.locator('#chips .pchip')).toHaveCount(6);
   if(info.project.name!=='mobile')return;
-  await page.screenshot({path:'screenshots/pantry.png'});
+  await page.screenshot({path:(process.env.SHOTS_DIR||'test-results/screenshots')+'/pantry.png'});
   await page.click('#cook');
   await expect(page.locator('.card.idea')).toHaveCount(2);
-  await page.screenshot({path:'screenshots/pantry-results.png',fullPage:true});
+  await page.screenshot({path:(process.env.SHOTS_DIR||'test-results/screenshots')+'/pantry-results.png',fullPage:true});
   await page.click('#rec');await page.waitForTimeout(1200);
-  await page.screenshot({path:'screenshots/pantry-recording.png'});
+  await page.screenshot({path:(process.env.SHOTS_DIR||'test-results/screenshots')+'/pantry-recording.png'});
 });

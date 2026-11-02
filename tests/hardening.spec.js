@@ -53,18 +53,30 @@ test('9: privacy notice shows once; delete recording keeps recipe',async({page})
   expect(v).toEqual({a:null,n:0});
 });
 
-test('11: a new service worker version shows the refresh prompt',async({page},info)=>{
-  test.skip(info.project.name!=='mobile','edits sw.js on disk: run once');
-  const fs=require('fs'),f=require('path').join(__dirname,'..','sw.js'),orig=fs.readFileSync(f,'utf8');
+test('11: a new service worker version shows the refresh prompt (isolated copy, random port)',async({page},info)=>{
+  test.skip(info.project.name!=='mobile','runs once');
+  const fs=require('fs'),os=require('os'),path=require('path'),http=require('http');
+  const root=path.join(__dirname,'..'),dir=fs.mkdtempSync(path.join(os.tmpdir(),'cj-sw-'));
+  for(const f of ['index.html','app.js','styles.css','sw.js','manifest.webmanifest'])fs.copyFileSync(path.join(root,f),path.join(dir,f));
+  for(const d of ['js','icons'])fs.cpSync(path.join(root,d),path.join(dir,d),{recursive:true});
+  const types={'.html':'text/html','.js':'text/javascript','.css':'text/css','.png':'image/png','.webmanifest':'application/manifest+json'};
+  const srv=http.createServer((q,r)=>{
+    let p=decodeURIComponent(new URL(q.url,'http://x').pathname);if(p.endsWith('/'))p+='index.html';
+    const f=path.join(dir,path.normalize(p));
+    if(!f.startsWith(dir)||!fs.existsSync(f)){r.writeHead(404);return r.end()}
+    r.writeHead(200,{'content-type':types[path.extname(f)]||'application/octet-stream','cache-control':'no-store'});r.end(fs.readFileSync(f));
+  });
+  await new Promise(r=>srv.listen(0,'127.0.0.1',r));
+  const base=`http://localhost:${srv.address().port}`,sw=path.join(dir,'sw.js'),orig=fs.readFileSync(sw,'utf8');
   try{
     await seed(page);await quiet(page);
-    await page.goto('/');
+    await page.goto(base+'/');
     await page.evaluate(()=>navigator.serviceWorker.ready);
     await expect(page.locator('#update-btn')).toHaveCount(0);   // first install: no prompt
-    fs.writeFileSync(f,orig.replace('cj-shell-v6','cj-shell-v7'));   // version bump
+    fs.writeFileSync(sw,orig.replace('cj-shell-v6','cj-shell-v7'));   // version bump, in the temp copy only
     await page.evaluate(()=>navigator.serviceWorker.getRegistration().then(r=>r.update()));
     await expect(page.locator('#update-btn')).toHaveText(/tap to refresh/);
-    await page.click('#update-btn');                              // activates the new worker and reloads
+    await page.click('#update-btn');
     await expect.poll(()=>page.evaluate(()=>caches.keys())).toContain('cj-shell-v7');
-  }finally{fs.writeFileSync(f,orig)}
+  }finally{srv.close();fs.rmSync(dir,{recursive:true,force:true})}
 });

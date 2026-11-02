@@ -101,6 +101,7 @@ async function finishPending(p,parts,transcript){
         parts:[...draft.parts,...parts],long:draft.long||p.long,pendingIds:[...draft.pendingIds,p.id]});
       sound.play('success');
     }else draft={name:r.dish,ingredients:r.ingredients,steps:r.steps,transcript,parts,long:p.long,pendingIds:[p.id]};
+    persistDraft();
     if(location.hash==='#/review')await route();else location.hash='#/review';
   }else if(p.kind==='append'){
     busy('Adding to your dish…');
@@ -204,6 +205,7 @@ async function dishesView(){
   const chip=(k,l,c)=>`<button class="fchip${dishFilter===k?' on':''}" type="button" data-f="${k}" aria-pressed="${dishFilter===k}">${l} <small>${c}</small></button>`;
   const list=all.filter(d=>dishFilter==='all'||d.status===dishFilter);
   app.innerHTML=`<h1>My dishes</h1><div class="filters" role="group" aria-label="Filter dishes">${chip('all','All',all.length)}${chip('finished','✅ Finished',n('finished'))}${chip('planning','📝 Planning',n('planning'))}</div>
+  <p class="hint" id="status-hint">A dish becomes ✅ finished once you rate it.</p>
   <div id="dlist">${list.length?list.map(dishCard).join(''):`<p class="empty">${all.length?'No dishes in this group.':'No dishes yet. Tap Record and describe what you cooked.'}</p>`}</div>`;
   $('.filters').onclick=e=>{const b=e.target.closest('.fchip');if(b){dishFilter=b.dataset.f;dishesView()}};
 }
@@ -219,6 +221,7 @@ function syncDraft(){
   d.ingredients=[...$('#ings').children].map(r=>Object.fromEntries([...r.querySelectorAll('input')].map(i=>[i.dataset.f,i.value.trim()]))).filter(i=>i.name);
   d.steps=[...$('#steps').querySelectorAll('textarea')].map(t=>t.value.trim()).filter(Boolean);
 }
+const persistDraft=()=>{if(draft)db.saveDraft(draft).catch(()=>{})};
 
 function review(){
   if(!draft){location.hash='#/';return}
@@ -239,14 +242,16 @@ function review(){
   steps.innerHTML=d.steps.map(stepRow).join('');
   $('#add-ing').onclick=()=>ings.insertAdjacentHTML('beforeend',ingRow({name:'',amount:'',unit:''}));
   $('#add-step').onclick=()=>steps.insertAdjacentHTML('beforeend',stepRow(''));
-  app.onclick=e=>{if(e.target.classList.contains('x'))e.target.parentElement.remove()};
-  $('#discard').onclick=async()=>{await Promise.all(d.pendingIds.map(db.deletePending));draft=null;location.hash='#/'};
+  const edit=()=>{if(draft===d&&$('#name')){syncDraft();persistDraft()}};
+  app.oninput=edit;
+  app.onclick=e=>{if(e.target.classList.contains('x')){e.target.parentElement.remove();edit()}};
+  $('#discard').onclick=async()=>{await Promise.all(d.pendingIds.map(db.deletePending));await db.clearDraft();draft=null;location.hash='#/'};
   $('#add-more').onclick=ev=>toggleRecord(ev.currentTarget,{kind:'new',intoDraft:true});
   $('#save').onclick=async()=>{
     syncDraft();
     if(!d.name)return showError('Please enter a dish name.');
     const v=await db.saveVersion({name:d.name,ingredients:amounts.enrichAll(d.ingredients),steps:d.steps,transcript:d.transcript,parts:d.parts});
-    await Promise.all(d.pendingIds.map(db.deletePending));
+    await Promise.all(d.pendingIds.map(db.deletePending));await db.clearDraft();
     data.persist();
     const res=game.award('dish',{newDish:v.newDish,n:v.n,long:d.long});
     draft=null;clearError();location.hash='#/version/'+v.id;celebrate(res);
@@ -378,19 +383,24 @@ function settings(root){
   $('#mute-setting').onchange=e=>{sound.setMuted(e.target.checked);syncMute()};
   const status=m=>{$('#data-status').textContent=m};
   data.persist().then(async()=>{$('#persist-status').textContent=await data.isPersisted()?'Storage: protected from automatic cleanup.':'Storage: the browser may clear this data when space is low. Add the app to your home screen and export backups.'});
+  const download=(blob,name)=>{
+    const a=document.createElement('a');
+    a.href=URL.createObjectURL(blob);a.download=name;
+    document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),10000);
+  };
   $('#export').onclick=async()=>{
-    try{
-      const blob=await data.exportAll(),a=document.createElement('a');
-      a.href=URL.createObjectURL(blob);a.download=`cooking-journal-${new Date().toISOString().slice(0,10)}.zip`;
-      document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),10000);
-      status('Backup saved.');
-    }catch(e){status('Export failed: '+e.message)}
+    try{download(await data.exportAll(),`cooking-journal-${new Date().toISOString().slice(0,10)}.zip`);status('Backup saved.')}
+    catch(e){status('Export failed: '+e.message)}
   };
   $('#import').onchange=async e=>{
     const f=e.target.files[0];e.target.value='';if(!f)return;
-    if(!confirm('Importing replaces ALL recipes, audio, progress and pantry on this device with the backup. Continue?'))return;
-    try{await data.importAll(f);status('Backup imported.');location.hash='#/';location.reload()}
-    catch(e){status('Import failed: '+e.message)}
+    try{
+      const i=await data.inspect(f),n=c=>`${c.dishes} dishes, ${c.sessions} sessions, ${c.pending} pending`;
+      const when=i.exportedAt?new Date(i.exportedAt).toLocaleString():'unknown date';
+      if(!confirm(`Import backup from ${when}?\n\nBackup: ${n(i.backup)}\nThis device now: ${n(i.current)}\n\nRecipes, audio, progress and pantry on this device will be replaced. Unfinished (pending) recordings here are kept. A safety backup of the current data is downloaded first.`))return;
+      download(await data.exportAll(),`cooking-journal-before-import-${new Date().toISOString().replace(/[:.]/g,'-')}.zip`);
+      await data.importAll(f);status('Backup imported.');location.hash='#/';location.reload();
+    }catch(e){status('Import failed: '+e.message)}
   };
 }
 
@@ -432,7 +442,7 @@ const flushRecording=()=>recorder?.flush();
 document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden')flushRecording()});
 addEventListener('pagehide',flushRecording);
 addEventListener('beforeunload',flushRecording);
-route().then(async()=>{if((await db.listPending()).some(p=>p.status==='queued'))scheduleDrain()});
+db.loadDraft().then(d=>{draft??=d},()=>{}).then(route).then(async()=>{if((await db.listPending()).some(p=>p.status==='queued'))scheduleDrain()});
 
 /* ---------- one-time privacy notice ---------- */
 function privacyNotice(){

@@ -48,12 +48,23 @@ export async function exportAll(){
   const manifest={app:'cooking-journal',format:1,exportedAt:new Date().toISOString(),localStorage:ls,db:data};
   return zip.write([['backup.json',new TextEncoder().encode(JSON.stringify(manifest))],...files]);
 }
-export async function importAll(file){
+async function parse(file){
   const files=zip.read(await file.arrayBuffer());
   const raw=files.get('backup.json');
   if(!raw)throw new Error('This zip is not a Cooking Journal backup.');
   const m=JSON.parse(new TextDecoder().decode(raw));
   if(m.app!=='cooking-journal'||m.format!==1)throw new Error('This zip is not a Cooking Journal backup.');
+  return {m,files};
+}
+const counts=d=>({dishes:d.dishes?.length||0,sessions:d.versions?.length||0,pending:d.pending?.length||0});
+/** Backup date and counts, next to what is on this device now. Throws on a bad file. */
+export async function inspect(file){
+  const {m}=await parse(file);
+  return {exportedAt:m.exportedAt,backup:counts(m.db),current:counts(await db.dumpAll())};
+}
+/** Import a backup. Dishes/versions/progress are replaced; pending sessions are kept (backup ones are added). */
+export async function importAll(file){
+  const {m,files}=await parse(file);
   const rows=decode(m.db,files,new Map());           // decode everything first so a bad file changes nothing
   await db.restoreAll(rows);
   for(const k of lsKeys())localStorage.removeItem(k);

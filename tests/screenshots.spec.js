@@ -1,5 +1,7 @@
 // Generates screenshots/*.png at 390x844 (mobile project only). Not an assertion-heavy test.
 const {test,expect}=require('@playwright/test');
+const OUT=process.env.SHOTS_DIR||'test-results/screenshots'; // set SHOTS_DIR=screenshots to refresh the committed images on purpose
+require('fs').mkdirSync(OUT,{recursive:true});
 
 
 test('capture home, recording, dish progress',async({page},info)=>{
@@ -18,17 +20,17 @@ test('capture home, recording, dish progress',async({page},info)=>{
   });
   await page.reload();
   await expect(page.locator('.card')).toHaveCount(3);
-  await page.screenshot({path:'screenshots/home.png',fullPage:true});
+  await page.screenshot({path:OUT+'/home.png',fullPage:true});
 
   await page.click('#rec');
   await page.waitForTimeout(1600);
   await page.click('.pause');
   await page.waitForTimeout(300);
-  await page.screenshot({path:'screenshots/recording.png'});
+  await page.screenshot({path:OUT+'/recording.png'});
   page.on('dialog',d=>d.accept()); // leaving mid-recording now asks first
 
   await page.goto('/#/');
   await page.locator('a.card',{hasText:'Machboos'}).click();
   await expect(page.locator('svg.chart')).toBeVisible();
-  await page.screenshot({path:'screenshots/dish.png',fullPage:true});
+  await page.screenshot({path:OUT+'/dish.png',fullPage:true});
 });
