@@ -80,3 +80,14 @@ export async function extractRating(transcript){
   const rating=Math.min(5,Math.max(1,Math.round(Number(o.rating))||3));
   return {rating,notes:String(o.notes||'')};
 }
+
+export const PANTRY_PROMPT='The cook lists food items they have at home (spoken, may include chatter). Reply with JSON only: {"items":[string]}. One short singular-or-natural ingredient name per item, lowercase, no amounts. Ignore chatter and nonsense. Normalize Omani/Arabic spellings to: '+OMANI_VOCAB.join(', ')+'.';
+export async function extractPantry(transcript){
+  const o=await chatJSON(PANTRY_PROMPT,transcript);
+  return (Array.isArray(o.items)?o.items:[]).map(x=>String(x).trim()).filter(Boolean);
+}
+export const IDEAS_PROMPT='You suggest dishes someone can cook from what is in their pantry (Omani and Gulf home cooking is welcome, but any cuisine is fine). Water, salt and basic oil are always available. Suggest 4 realistic dishes that use mostly pantry items, each needing at most 3 extra ingredients. Do not suggest dishes from the "already known" list. Reply with JSON only: {"ideas":[{"name":string,"why":string (one short sentence),"missing":[string]}]}.';
+export async function suggestIdeas(pantry,known=[]){
+  const o=await chatJSON(IDEAS_PROMPT,JSON.stringify({pantry,alreadyKnown:known}));
+  return (Array.isArray(o.ideas)?o.ideas:[]).map(i=>({name:String(i.name||''),why:String(i.why||''),missing:(Array.isArray(i.missing)?i.missing:[]).map(String)})).filter(i=>i.name);
+}

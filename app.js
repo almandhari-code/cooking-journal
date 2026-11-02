@@ -6,6 +6,7 @@ import * as game from './js/game.js';
 import * as sound from './js/sound.js';
 import {celebrate} from './js/fx.js';
 import {progressChart} from './js/chart.js';
+import * as pantry from './js/pantry.js';
 
 const app=$('#app');
 let recorder=null;       // active Recorder
@@ -65,6 +66,7 @@ async function home(){
   app.innerHTML=hero()+`<h1>My dishes</h1>`+(dishes.length?dishes.map(d=>`
     <a class="card" href="#/dish/${d.id}"><strong>${esc(d.name)}</strong><br><small>${d.versionCount} version${d.versionCount>1?'s':''}</small></a>`).join('')
     :`<p class="empty">No dishes yet. Tap Record and describe what you cooked.</p>`)
+    +`<a class="tile pantry-link" href="#/pantry"><strong>🧺 My pantry</strong><br><small>${pantry.load().length} item${pantry.load().length===1?'':'s'} · see what you can cook</small></a>`
     +badgesHTML()
     +`<div class="dock">${recBox('rec','Record','Tap to start, tap again to stop. You can pause any time.')}</div>`;
   if(!groq.getKey())showError(keyMissingMsg);
@@ -209,6 +211,57 @@ function afterReview(){
   };
 }
 
+
+/* ---------- pantry ---------- */
+let cook=null; // last "what can I cook" result, kept while on the pantry page
+const chips=()=>pantry.load().map(p=>`<li class="pchip"><span>${esc(p)}</span><button class="x" type="button" data-name="${esc(p)}" aria-label="Remove ${esc(p)}">✕</button></li>`).join('');
+const missHTML=m=>m.length?`<p class="miss">Missing: ${m.map(esc).join(', ')}</p>`:`<p class="miss ok">You have everything! 🎉</p>`;
+function cookHTML(){
+  if(!cook)return '';
+  const saved=cook.saved.map(f=>`<a class="card fit" href="#/version/${f.version.id}"><strong>${esc(f.dish.name)}</strong> <small>v${f.version.n}${f.version.after?` · <span class="stars">${stars(f.version.after.rating)}</span>`:' · not rated'}</small>${missHTML(f.missing)}</a>`).join('');
+  const ideas=cook.ideas.map(i=>`<div class="card idea"><strong>💡 ${esc(i.name)}</strong><br><small>${esc(i.why)}</small>${missHTML(i.missing)}</div>`).join('');
+  return `<h2>From your journal</h2>${saved||'<p class="empty">No saved dish fits yet.</p>'}<h2>New ideas</h2>${cook.err?`<p class="empty">${esc(cook.err)}</p>`:ideas||'<p class="empty">No ideas came back. Try again.</p>'}`;
+}
+async function pantryView(){
+  app.innerHTML=`<h1>My pantry 🧺</h1>
+  <form id="padd" class="padd"><input id="pitem" aria-label="Add an ingredient" placeholder="Type an ingredient…" autocomplete="off"><button class="btn small" type="submit">Add</button></form>
+  <ul id="chips" class="chips" aria-label="Pantry items"></ul><p id="pempty" class="empty" hidden>Your pantry is empty. Type or record what you have.</p>
+  <button class="btn big" id="cook" type="button">🍲 What can I cook?</button>
+  <div id="cook-out" aria-live="polite"></div>
+  <div class="dock">${recBox('rec','Record','Tap and say what you have, e.g. "rice, onions, chicken"')}</div>`;
+  const render=()=>{$('#chips').innerHTML=chips();$('#pempty').hidden=pantry.load().length>0;$('#cook').disabled=!pantry.load().length};
+  render();$('#cook-out').innerHTML=cookHTML();
+  $('#padd').onsubmit=e=>{e.preventDefault();const v=$('#pitem').value;$('#pitem').value='';
+    // allow "rice, onion" typed in one go
+    if(pantry.add(v.split(/[,،\n]/)).length)sound.play('tap');render()};
+  $('#chips').onclick=e=>{const b=e.target.closest('.x');if(!b)return;pantry.remove(b.dataset.name);sound.play('tap');render()};
+  $('#cook').onclick=async()=>{
+    clearError();const list=pantry.load(),out=$('#cook-out');
+    out.innerHTML='<div class="busy" role="status">Looking through your journal…</div>';
+    const dishes=await db.listDishes();
+    const saved=pantry.fits(await Promise.all(dishes.map(async d=>({dish:d,versions:await db.listVersions(d.id)}))),list);
+    cook={saved,ideas:[]};out.innerHTML=cookHTML()+'<div class="busy" role="status">Asking the chef for new ideas…</div>';
+    try{
+      if(!groq.getKey())throw new Error('NO_KEY');
+      cook.ideas=await groq.suggestIdeas(list,dishes.map(d=>d.name));
+      sound.play('success');
+    }catch(e){sound.play('error');cook.err=e.message==='NO_KEY'?'Add your Groq API key in Settings to get new ideas.':e.message}
+    if(location.hash==='#/pantry')out.innerHTML=cookHTML();
+  };
+  $('#rec').onclick=ev=>toggleRecord(ev.currentTarget,async parts=>{
+    busy('Transcribing…');
+    try{
+      const transcript=await transcribing(parts);
+      if(!transcript)throw new Error('No speech was detected. Try recording again.');
+      busy('Reading your list…');
+      const items=await groq.extractPantry(transcript);
+      const added=pantry.add(items);
+      sound.play('success');await route(true);
+      if(!added.length)showError('Nothing new heard. Try again?');
+    }catch(e){sound.play('error');await route(true);fail(e)}
+  });
+}
+
 function settings(){
   app.innerHTML=`<h1>Settings</h1>
   <label for="key">Groq API key</label>
@@ -227,7 +280,7 @@ function syncMute(){
 }
 $('#mute').onclick=()=>{sound.setMuted(!sound.isMuted());syncMute();sound.play('tap')};
 syncMute();
-document.addEventListener('click',e=>{if(e.target.closest('.btn,.card'))sound.play('tap')});
+document.addEventListener('click',e=>{if(e.target.closest('.btn,.card,.tile'))sound.play('tap')});
 
 /* ---------- router ---------- */
 async function route(keep){
@@ -238,6 +291,7 @@ async function route(keep){
   try{
     if(page==='review')review();
     else if(page==='settings')settings();
+    else if(page==='pantry')await pantryView();
     else if(page==='dish')await dish(arg);
     else if(page==='version')afterDraft&&afterDraft.versionId===+arg?afterReview():await version(arg);
     else await home();
