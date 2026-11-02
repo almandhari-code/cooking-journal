@@ -1,0 +1,1 @@
+{"name":"cooking-journal","private":true,"scripts":{"test":"playwright test"},"devDependencies":{"@playwright/test":"latest"}}
