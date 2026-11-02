@@ -75,11 +75,11 @@ test('missing ingredients shown for near-fit dish; ideas error keeps saved resul
   await expect(page.locator('#cook-out')).toContainText('rate limit');
 });
 
-test('home links to pantry; screenshots',async({page},info)=>{
+test('tab bar links to pantry; screenshots',async({page},info)=>{
   await clean(page);await mock(page,{chat:[]});await page.goto('/');await seed(page);
   await page.evaluate(()=>localStorage.setItem('cj_pantry',JSON.stringify(['rice','onions','saffron','chicken','tomatoes','lemon'])));
   await page.reload();
-  await page.click('.pantry-link');
+  await page.click('#tab-pantry');
   await expect(page).toHaveURL(/#\/pantry/);
   await expect(page.locator('#chips .pchip')).toHaveCount(6);
   if(info.project.name!=='mobile')return;

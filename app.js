@@ -134,9 +134,19 @@ function scheduleDrain(ms=window.CJ_QUEUE_MS||30000){
     for(const p of await db.listPending())if(p.status==='queued'&&p.id!==activeId)await runPending(p.id,{background:true});
   },ms);
 }
-addEventListener('cj-install',()=>{if(!recorder&&(!location.hash||location.hash==='#/'))route(true)});
+addEventListener('cj-install',renderInstall);
 data.persist();
 addEventListener('online',()=>scheduleDrain(500));
+function renderTabs(){
+  const [,page]=location.hash.slice(1).split('/');
+  const cur=page==='dishes'||page==='dish'||page==='version'||page==='review'?'dishes':page==='pantry'?'pantry':page==='me'||page==='settings'?'me':'home';
+  document.querySelectorAll('#tabs [data-tab]').forEach(t=>{const on=t.dataset.tab===cur;t.classList.toggle('on',on);on?t.setAttribute('aria-current','page'):t.removeAttribute('aria-current')});
+}
+$('#tab-rec').onclick=()=>{
+  const r=$('#rec');
+  if(r&&(location.hash===''||location.hash==='#/'||location.hash==='#/pantry'))r.click();else location.hash='#/';
+};
+renderInstall();
 async function renderPending(){
   const box=$('#pending');
   const hidden=new Set([...(draft?.pendingIds||[]),afterDraft?.pendingId]);
@@ -168,23 +178,38 @@ function badgesHTML(){
     `<div class="badge ${have.has(b.id)?'got':'locked'}" title="${esc(b.desc)}"><span class="em">${have.has(b.id)?b.emoji:'🔒'}</span><small>${esc(b.name)}</small></div>`).join('')+`</div>`;
 }
 
-const installTile=()=>{
-  const m=data.installMode();
-  return m==='prompt'?`<button class="tile install" id="install" type="button"><strong>📲 Install the app</strong><br><small>Add it to your home screen so it opens like an app</small></button>`
-    :m==='ios'?`<div class="tile install" id="install-ios"><strong>📲 Add to Home Screen</strong><br><small>Tap Share ⬆️ then “Add to Home Screen”. iPhone only keeps recordings safely for installed apps.</small></div>`:'';
+/* install: a small icon button in the header (Chrome prompt) or a tiny hint (iOS) */
+function renderInstall(){
+  const m=data.installMode(),b=$('#install');
+  b.hidden=!m;b.dataset.mode=m||'';
+  if(!m)$('#install-ios').hidden=true;
+}
+$('#install').onclick=()=>{
+  if(data.installMode()==='prompt')data.install();
+  else{const t=$('#install-ios');t.hidden=!t.hidden}
 };
+const dishStatus=d=>d.status==='finished'?'finished':'planning';
+const dishCard=d=>`<a class="card dishcard" href="#/dish/${d.id}"><strong>${esc(d.name)}</strong> <span class="status ${dishStatus(d)}">${d.status==='finished'?'✅ Finished':'📝 Planning'}</span><br><small>${d.versionCount} version${d.versionCount>1?'s':''}</small></a>`;
 async function home(){
-  const dishes=await db.listDishes();
-  app.innerHTML=hero()+`<h1>My dishes</h1>`+(dishes.length?dishes.map(d=>`
-    <a class="card" href="#/dish/${d.id}"><strong>${esc(d.name)}</strong><br><small>${d.versionCount} version${d.versionCount>1?'s':''}</small></a>`).join('')
-    :`<p class="empty">No dishes yet. Tap Record and describe what you cooked.</p>`)
-    +`<a class="tile pantry-link" href="#/pantry"><strong>🧺 My pantry</strong><br><small>${pantry.load().length} item${pantry.load().length===1?'':'s'} · see what you can cook</small></a>`
-    +installTile()
-    +badgesHTML()
-    +`<div class="dock">${recBox('rec','Record','Tap to start, tap again to stop. You can pause any time.')}</div>`;
+  const dishes=(await db.listDishes()).slice(0,3);
+  app.innerHTML=hero()+`<div class="bigrec">${recBox('rec','Record','Tap to start, tap again to stop. You can pause any time.')}</div>
+  <h2>Recent dishes <a class="link more" href="#/dishes">See all</a></h2>`+(dishes.length?`<div class="recent">${dishes.map(dishCard).join('')}</div>`
+    :`<p class="empty">No dishes yet. Tap Record and describe what you cooked.</p>`);
   if(!groq.getKey())showError(keyMissingMsg);
-  if($('#install'))$('#install').onclick=()=>data.install();
   $('#rec').onclick=ev=>toggleRecord(ev.currentTarget,{kind:'new'});
+}
+let dishFilter='all';
+async function dishesView(){
+  const all=await db.listDishes(),n=s=>all.filter(d=>d.status===s).length;
+  const chip=(k,l,c)=>`<button class="fchip${dishFilter===k?' on':''}" type="button" data-f="${k}" aria-pressed="${dishFilter===k}">${l} <small>${c}</small></button>`;
+  const list=all.filter(d=>dishFilter==='all'||d.status===dishFilter);
+  app.innerHTML=`<h1>My dishes</h1><div class="filters" role="group" aria-label="Filter dishes">${chip('all','All',all.length)}${chip('finished','✅ Finished',n('finished'))}${chip('planning','📝 Planning',n('planning'))}</div>
+  <div id="dlist">${list.length?list.map(dishCard).join(''):`<p class="empty">${all.length?'No dishes in this group.':'No dishes yet. Tap Record and describe what you cooked.'}</p>`}</div>`;
+  $('.filters').onclick=e=>{const b=e.target.closest('.fchip');if(b){dishFilter=b.dataset.f;dishesView()}};
+}
+async function meView(){
+  app.innerHTML='<h1>Me</h1>'+hero()+badgesHTML()+'<div id="settings"></div>';
+  settings($('#settings'));
 }
 
 /** Copy the review form's current values into the draft (so re-renders keep edits). */
@@ -337,8 +362,8 @@ async function pantryView(){
   $('#rec').onclick=ev=>toggleRecord(ev.currentTarget,{kind:'pantry'});
 }
 
-function settings(){
-  app.innerHTML=`<h1>Settings</h1>
+function settings(root){
+  root.innerHTML=`<h2>Settings</h2>
   <label for="key">Groq API key</label>
   <input id="key" type="password" autocomplete="off" placeholder="gsk_..." value="${esc(groq.getKey())}">
   <p class="hint">Stored only in this browser (localStorage). Never sent anywhere except Groq. When you record, your voice and transcript are sent to Groq to be turned into text and a recipe.</p>
@@ -386,13 +411,14 @@ async function route(keep){
   if(keep!==true)clearError();
   try{
     if(page==='review')review();
-    else if(page==='settings')settings();
+    else if(page==='dishes')await dishesView();
+    else if(page==='me'||page==='settings')await meView();
     else if(page==='pantry')await pantryView();
     else if(page==='dish')await dish(arg);
     else if(page==='version')afterDraft&&afterDraft.versionId===+arg?afterReview():await version(arg);
     else await home();
   }catch(e){fail(e)}
-  renderPending();
+  renderTabs();renderPending();
 }
 /* leaving mid-recording asks first; whatever was recorded is kept as a pending session either way */
 let curHash=location.hash;

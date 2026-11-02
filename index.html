@@ -14,14 +14,22 @@
 <body>
 <header class="top">
   <a href="#/" class="brand">🍳 Cooking Journal</a>
-  <span class="nav"><button id="mute" class="icon-btn" type="button" aria-pressed="false" aria-label="Mute sounds">🔊</button><a href="#/pantry" class="link" id="nav-pantry">Pantry</a><a href="#/settings" class="link" id="nav-settings">Settings</a></span>
+  <span class="nav"><button id="install" class="icon-btn" type="button" aria-label="Install the app" title="Install the app" hidden>📲</button><button id="mute" class="icon-btn" type="button" aria-pressed="false" aria-label="Mute sounds">🔊</button></span>
 </header>
+<div id="install-ios" class="banner" role="note" hidden><small>📲 Tap Share ⬆️ then “Add to Home Screen”. iPhone only keeps recordings safely for installed apps.</small></div>
 <div id="error" class="banner error" role="alert" hidden></div>
 <div id="netstatus" class="banner" role="status" hidden></div>
 <div id="notice"></div>
 <div id="update"></div>
 <div id="pending"></div>
 <main id="app"></main>
+<nav id="tabs" aria-label="Main">
+  <a href="#/" data-tab="home" id="tab-home"><span aria-hidden="true">🏠</span>Home</a>
+  <a href="#/dishes" data-tab="dishes" id="tab-dishes"><span aria-hidden="true">🍲</span>Dishes</a>
+  <button type="button" id="tab-rec" class="tabrec" aria-label="Record"><span aria-hidden="true">🎙️</span><b>Record</b></button>
+  <a href="#/pantry" data-tab="pantry" id="tab-pantry"><span aria-hidden="true">🧺</span>Pantry</a>
+  <a href="#/me" data-tab="me" id="tab-me"><span aria-hidden="true">🧁</span>Me</a>
+</nav>
 <div id="toast" role="status" aria-live="polite"></div>
 <script type="module" src="app.js"></script>
 </body>

@@ -20,7 +20,7 @@ export async function listDishes(){
   const out=[];
   for(const d of dishes){
     const vs=await listVersions(d.id);
-    out.push({...d,versionCount:vs.length,last:vs.at(-1)?.createdAt||0});
+    out.push({...d,versionCount:vs.length,last:vs.at(-1)?.createdAt||0,status:vs.some(v=>v.after)?'finished':'planning'});
   }
   return out.sort((a,b)=>b.last-a.last);
 }

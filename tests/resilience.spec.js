@@ -53,14 +53,14 @@ test('2: leaving mid-recording asks first; hidden/unload flush partial audio to 
   // navigating away: cancel keeps recording
   const dialogs=[];
   page.on('dialog',d=>{dialogs.push(d.message());dialogs.length===1?d.dismiss():d.accept()});
-  await page.click('#nav-settings');
+  await page.click('#tab-me');
   await expect.poll(()=>dialogs.length).toBe(1);
   expect(dialogs[0]).toContain('recording');
   await expect(page.locator('#rec')).toHaveText('Stop');
   expect(await page.evaluate(()=>location.hash)).not.toContain('settings');
   // confirm: leaves, and the audio is kept as a pending session
-  await page.click('#nav-settings');
-  await expect(page.locator('h1')).toHaveText('Settings');
+  await page.click('#tab-me');
+  await expect(page.locator('h1')).toHaveText('Me');
   await expect(page.locator('#pending .pend')).toHaveCount(1);
   const s=await liveOf(page);
   expect(s.parts).toBeGreaterThanOrEqual(1);expect(s.live).toBe(0);
@@ -150,7 +150,7 @@ test('4b: bad file is rejected without touching data',async({page})=>{
 
 test('4c: install tile appears on beforeinstallprompt and calls prompt()',async({page})=>{
   await seed(page);await page.goto('/');
-  await expect(page.locator('#install')).toHaveCount(0);
+  await expect(page.locator('#install')).toBeHidden();
   await page.evaluate(()=>{const e=new Event('beforeinstallprompt',{cancelable:true});window.__prompted=0;e.prompt=async()=>{window.__prompted++};window.dispatchEvent(e)});
   await expect(page.locator('#install')).toBeVisible();
   await page.click('#install');

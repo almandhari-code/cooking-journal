@@ -61,10 +61,10 @@ test('11: a new service worker version shows the refresh prompt',async({page},in
     await page.goto('/');
     await page.evaluate(()=>navigator.serviceWorker.ready);
     await expect(page.locator('#update-btn')).toHaveCount(0);   // first install: no prompt
-    fs.writeFileSync(f,orig.replace('cj-shell-v5','cj-shell-v6'));   // version bump
+    fs.writeFileSync(f,orig.replace('cj-shell-v6','cj-shell-v7'));   // version bump
     await page.evaluate(()=>navigator.serviceWorker.getRegistration().then(r=>r.update()));
     await expect(page.locator('#update-btn')).toHaveText(/tap to refresh/);
     await page.click('#update-btn');                              // activates the new worker and reloads
-    await expect.poll(()=>page.evaluate(()=>caches.keys())).toContain('cj-shell-v6');
+    await expect.poll(()=>page.evaluate(()=>caches.keys())).toContain('cj-shell-v7');
   }finally{fs.writeFileSync(f,orig)}
 });

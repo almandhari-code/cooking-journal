@@ -152,7 +152,7 @@ test('mute toggle silences sounds and is saved in settings',async({page})=>{
   await expect(page.locator('#mute-setting')).toBeChecked();
   await page.uncheck('#mute-setting');
   await expect(page.locator('#mute')).toHaveAttribute('aria-pressed','false');
-  await page.click('#nav-settings');
+  await page.click('#tab-me');
   await page.evaluate(()=>import('/js/sound.js').then(m=>m.play('success')));
   expect(await page.evaluate(()=>window.__cjSounds)).toEqual(['success']);
 });

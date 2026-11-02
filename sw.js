@@ -1,4 +1,4 @@
-const CACHE='cj-shell-v5';
+const CACHE='cj-shell-v6';
 const SHELL=['./','index.html','styles.css','app.js','js/db.js','js/groq.js','js/recorder.js','js/ui.js','js/game.js','js/sound.js','js/fx.js','js/chart.js','js/pantry.js','js/data.js','js/zip.js','js/amounts.js','manifest.webmanifest','icons/icon-192.png','icons/icon-512.png','icons/icon-maskable-512.png'];
 self.addEventListener('install',e=>{e.waitUntil(caches.open(CACHE).then(c=>c.addAll(SHELL)))});
 self.addEventListener('message',e=>{if(e.data==='SKIP_WAITING')self.skipWaiting()}); // the page asks once the user taps refresh
