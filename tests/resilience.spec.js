@@ -156,3 +156,62 @@ test('4c: install tile appears on beforeinstallprompt and calls prompt()',async(
   await page.click('#install');
   expect(await page.evaluate(()=>window.__prompted)).toBe(1);
 });
+
+/** A MediaRecorder that never touches real audio: timeslice chunks are text, so parts can be inspected.
+ *  cfg.mime: the only supported type. cfg.oneAtATime: starting a 2nd recorder on the stream throws (like iOS). */
+const fakeMR=cfg=>{
+  let active=0,ids=0;
+  class MR{
+    static isTypeSupported(t){return t===cfg.mime}
+    constructor(stream,o){this.state='inactive';this.mimeType=o.mimeType||cfg.mime;this.id=++ids;this.n=0;this.buf=[]}
+    _chunk(){return `${this.n++?`${this.id}.${this.n};`:`INIT${this.id};`}`}
+    _emit(txt){this.ondataavailable?.({data:new Blob([txt],{type:this.mimeType})})}
+    start(ts){
+      if(cfg.oneAtATime&&active>=1)throw new DOMException('only one recorder per stream','InvalidStateError');
+      active++;this.state='recording';
+      if(ts)this.iv=setInterval(()=>this._emit(this._chunk()),ts);
+    }
+    requestData(){this._emit(this._chunk())}
+    pause(){this.state='paused'}resume(){this.state='recording'}
+    stop(){clearInterval(this.iv);this._emit(this._chunk());this.state='inactive';active--;setTimeout(()=>this.onstop?.(),0)}
+  }
+  window.MediaRecorder=MR;
+};
+async function threeMinutes(page,cfg){
+  await seed(page);
+  await page.addInitScript(fakeMR,cfg);
+  await page.addInitScript(()=>{window.CJ_CHUNK_MS=60000});
+  await page.clock.install();
+  await page.goto('/');
+  await page.evaluate(async()=>{const {Recorder}=await import('/js/recorder.js');window.__r=new Recorder();await window.__r.start()});
+  await page.clock.runFor(180000);
+  await page.evaluate(()=>{window.__stop=window.__r.stop()});
+  await page.clock.runFor(50);
+  return page.evaluate(async()=>{const parts=await window.__stop;return {single:window.__r.single,parts:await Promise.all(parts.map(b=>b.text()))}});
+}
+function expectPlayableParts(r){
+  expect(r.parts).toHaveLength(3);
+  const seen=[];
+  for(const t of r.parts){
+    expect(t).toMatch(/^INIT\d+;/);                       // every part starts with an init chunk: decodes on its own
+    expect(t.match(/INIT/g)).toHaveLength(1);
+    for(const id of t.match(/\d+\.\d+/g)||[])seen.push(id);
+  }
+  expect(new Set(seen).size).toBe(seen.length);           // no audio duplicated between parts
+  expect(seen.length).toBeGreaterThan(20);                // and nothing dropped: ~36 timeslices of 5 s
+}
+
+test('5: iOS-style (mp4, one recorder per stream): 3 min at 60000 ms -> 3 playable parts via single recorder',async({page})=>{
+  const r=await threeMinutes(page,{mime:'audio/mp4',oneAtATime:true});
+  expect(r.single).toBe(true);expectPlayableParts(r);
+});
+test('5b: webm where the 2nd recorder fails at the first cut falls back to single recorder, still 3 parts',async({page})=>{
+  const r=await threeMinutes(page,{mime:'audio/webm',oneAtATime:true});
+  expect(r.single).toBe(true);
+  expect(r.parts).toHaveLength(3);
+  for(const t of r.parts)expect(t).toMatch(/^INIT\d+;/);
+});
+test('5c: CJ_CHUNK_MS also read from localStorage cj_chunk_ms',async({page})=>{
+  await seed(page);await page.goto('/');
+  expect(await page.evaluate(async()=>{localStorage.cj_chunk_ms='1234';const {Recorder}=await import('/js/recorder.js');return new Recorder().chunkMs})).toBe(1234);
+});
