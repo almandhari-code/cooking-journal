@@ -8,11 +8,11 @@ async function call(path,opts){
   if(!key)throw new Error('NO_KEY');
   let r;
   try{r=await fetch(BASE+path,{...opts,headers:{Authorization:'Bearer '+key,...opts.headers}})}
-  catch{throw new Error('Network error: could not reach Groq. Check your connection and try again.')}
+  catch{throw Object.assign(new Error('Network error: could not reach Groq. Check your connection and try again.'),{network:true})}
   if(!r.ok){
     let m='';try{m=(await r.json()).error?.message||''}catch{}
-    if(r.status===401)throw new Error('Groq rejected the API key (401). Check it in Settings.');
-    if(r.status===429)throw new Error('Groq rate limit reached (429). Wait a moment and try again.');
+    if(r.status===401)throw Object.assign(new Error('Groq rejected the API key (401). Check it in Settings.'),{status:401});
+    if(r.status===429)throw Object.assign(new Error('Groq rate limit reached (429). Wait a moment and try again.'),{status:429});
     const e=new Error(`Groq API error (${r.status})${m?': '+m:''}`);e.status=r.status;throw e;
   }
   return r.json();
@@ -54,7 +54,7 @@ async function chatJSON(system,user){
       const txt=j.choices?.[0]?.message?.content||'';
       return JSON.parse(txt.replace(/^```(?:json)?|```$/g,'').trim());
     }catch(e){
-      if(e.message==='NO_KEY'||e.message.startsWith('Network')||e.status===401)throw e;
+      if(e.message==='NO_KEY'||e.network||e.status===401||e.status===429)throw e;
       last=e;
     }
   }

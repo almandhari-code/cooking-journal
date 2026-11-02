@@ -10,8 +10,10 @@ import * as pantry from './js/pantry.js';
 
 const app=$('#app');
 let recorder=null;       // active Recorder
-let draft=null;          // {name,ingredients,steps,transcript,parts,long}
-let afterDraft=null;     // {versionId,rating,notes,transcript,parts}
+let draft=null;          // {name,ingredients,steps,transcript,parts,long,pendingIds}
+let afterDraft=null;     // {versionId,rating,notes,transcript,parts,pendingId}
+let activeId=null;       // pending-session id of the recording in progress
+const running=new Set(); // pending ids being processed right now
 const urls=[];
 
 const fail=e=>showError(e.message==='NO_KEY'?keyMissingMsg:esc(e.message));
@@ -21,14 +23,18 @@ const busy=msg=>{app.innerHTML=`<div class="busy" role="status">${esc(msg)}</div
 const recBox=(id,label,hint,cls='')=>`<div class="recbox ${cls}"><div class="rec-row"><button class="pause" type="button" hidden>⏸ Pause</button><button id="${id}" class="rec ${id==='rec'?'':'pill'}" type="button" aria-label="${esc(label)}">${id==='rec'?'Record':esc(label)}</button></div><div class="timer" hidden aria-live="off">0:00</div><div class="hint">${esc(hint)}</div></div>`;
 
 /** Start/stop a session. Pause/resume happens inside the same session. onDone(parts,{long}) */
-async function toggleRecord(btn,onDone){
+async function toggleRecord(btn,meta){
   clearError();
   const box=btn.closest('.recbox'),pauseBtn=$('.pause',box),timer=$('.timer',box),hint=$('.hint',box);
   if(!recorder){
     if(!groq.getKey())return showError(keyMissingMsg);
     const r=new Recorder();
     try{await r.start()}catch(e){sound.play('error');return fail(e)}
-    recorder=r;btn.classList.add('on');btn.textContent='Stop';
+    // the audio goes to IndexedDB as soon as each chunk exists, so nothing depends on the network or this page staying open
+    const p=await db.createPending(meta);
+    r.q=Promise.resolve();
+    r.onChange=(parts)=>{r.q=r.q.then(()=>db.patchPending(p.id,{parts})).catch(()=>{})};
+    activeId=p.id;recorder=r;btn.classList.add('on');btn.textContent='Stop';
     document.querySelectorAll('.rec').forEach(b=>{if(b!==btn)b.disabled=true});
     pauseBtn.hidden=false;timer.hidden=false;box.classList.add('live');
     hint.textContent='Recording… tap Pause for a break, Stop when done';
@@ -39,13 +45,107 @@ async function toggleRecord(btn,onDone){
       else{r.pause();pauseBtn.textContent='▶ Resume';box.classList.add('paused');hint.textContent='Paused. Tap Resume to keep going in the same session';sound.play('pause')}
     };
   }else{
-    const r=recorder;recorder=null;
+    const r=recorder,id=activeId;recorder=null;activeId=null;
     sound.play('stop');
-    const parts=await r.stop();
-    await onDone(parts,{long:r.pauses>0||parts.length>1});
+    if(!await finalizeRecording(r,id))return showError('No audio was captured. Try again.');
+    await runPending(id);
   }
 }
-const transcribing=parts=>groq.transcribeParts(parts,(i,n)=>busy(n>1?`Transcribing part ${i} of ${n}…`:'Transcribing…'));
+/** Stop a recorder and store its final parts in its pending session. Returns the parts, or null if there was no audio. */
+async function finalizeRecording(r,id){
+  let parts=[];
+  try{parts=await r.stop();await r.q}catch{}
+  if(!parts.length){await db.deletePending(id);return null}
+  await db.patchPending(id,{parts,live:null,status:'new',long:r.pauses>0||parts.length>1});
+  return parts;
+}
+
+/* ---------- pending sessions: transcribe -> extract -> hand over, resumable at every step ---------- */
+const KIND_LABEL={new:'New recipe',append:'Addition to a dish',after:'After-eating note',pantry:'Pantry list'};
+const permanent=e=>!(e.status===429||e.network);
+async function runPending(id,{background=false}={}){
+  if(running.has(id))return;
+  running.add(id);renderPending();
+  try{
+    const p=await db.getPending(id);
+    if(!p)return;
+    const parts=[...p.parts,...(p.live?[p.live]:[])],texts=p.texts.slice();
+    for(let i=0;i<parts.length;i++){
+      if(texts[i]!=null)continue;                       // already transcribed on an earlier try
+      if(!background)busy(parts.length>1?`Transcribing part ${i+1} of ${parts.length}…`:'Transcribing…');
+      texts[i]=await groq.transcribe(parts[i],texts.filter(Boolean).join(' '));
+      await db.patchPending(id,{texts});                // keep it so a retry never pays twice
+    }
+    if(background){await db.patchPending(id,{status:'new',error:''});return}
+    const transcript=texts.filter(Boolean).join(' ');
+    if(!transcript)throw new Error('No speech was detected. Try recording again.');
+    await finishPending(p,parts,transcript);
+  }catch(e){
+    const err=e.message==='NO_KEY'?'Add your Groq API key in Settings, then tap Retry.':e.message;
+    await db.patchPending(id,{status:permanent(e)?'error':'queued',error:err}).catch(()=>{});
+    if(!background){sound.play('error');await route(true);fail(e)}
+    scheduleDrain();
+  }finally{running.delete(id);renderPending()}
+}
+async function finishPending(p,parts,transcript){
+  if(p.kind==='new'){
+    const into=p.intoDraft&&draft;
+    if(into&&$('#name'))syncDraft();
+    busy(into?'Adding to your dish…':'Extracting recipe…');
+    const r=await groq.extractRecipe(transcript);
+    if(into){
+      Object.assign(draft,db.mergeRecipe(draft,r),{name:draft.name||r.dish,transcript:[draft.transcript,transcript].join('\n\n'),
+        parts:[...draft.parts,...parts],long:draft.long||p.long,pendingIds:[...draft.pendingIds,p.id]});
+      sound.play('success');
+    }else draft={name:r.dish,ingredients:r.ingredients,steps:r.steps,transcript,parts,long:p.long,pendingIds:[p.id]};
+    if(location.hash==='#/review')await route();else location.hash='#/review';
+  }else if(p.kind==='append'){
+    busy('Adding to your dish…');
+    const recipe=await groq.extractRecipe(transcript);
+    await db.appendToVersion(p.targetId,{parts,transcript,recipe});
+    await db.deletePending(p.id);
+    const res=game.award('append',{long:p.long});
+    await route();celebrate(res);
+  }else if(p.kind==='after'){
+    busy('Rating…');
+    const r=await groq.extractRating(transcript);
+    afterDraft={versionId:p.targetId,rating:r.rating,notes:r.notes,transcript,parts,pendingId:p.id};
+    if(location.hash==='#/version/'+p.targetId)await route();else location.hash='#/version/'+p.targetId;
+  }else{
+    busy('Reading your list…');
+    const added=pantry.add(await groq.extractPantry(transcript));
+    await db.deletePending(p.id);
+    sound.play('success');
+    if(location.hash==='#/pantry')await route(true);else location.hash='#/pantry';
+    if(!added.length)showError('Nothing new heard. Try again?');
+  }
+}
+/** Sessions that hit a rate limit or the network are retried automatically later, and when the network comes back. */
+let drainTimer=null;
+function scheduleDrain(ms=window.CJ_QUEUE_MS||30000){
+  if(drainTimer)return;
+  drainTimer=setTimeout(async()=>{
+    drainTimer=null;
+    for(const p of await db.listPending())if(p.status==='queued'&&p.id!==activeId)await runPending(p.id,{background:true});
+  },ms);
+}
+addEventListener('online',()=>scheduleDrain(500));
+async function renderPending(){
+  const box=$('#pending');
+  const hidden=new Set([...(draft?.pendingIds||[]),afterDraft?.pendingId]);
+  const list=(await db.listPending()).filter(p=>p.id!==activeId&&!hidden.has(p.id));
+  box.innerHTML=list.map(p=>{
+    const n=p.parts.length+(p.live?1:0),busyNow=running.has(p.id);
+    const state=busyNow?'Working on it…':p.status==='queued'?'Waiting to retry automatically':p.status==='error'?'Needs a retry':p.status==='recording'?'Recording was interrupted, audio is safe':'Recorded, not processed yet';
+    return `<div class="banner pend" data-id="${p.id}"><strong>🎙️ ${KIND_LABEL[p.kind]}</strong> <small>${n} part${n===1?'':'s'} · ${state}</small>${p.error?`<br><small>${esc(p.error)}</small>`:''}
+    <div class="row"><button class="btn small retry" type="button" ${busyNow?'disabled':''}>${p.status==='new'||p.status==='recording'?'Process':'Retry'}</button><button class="btn sec small drop" type="button" ${busyNow?'disabled':''}>Discard</button></div></div>`}).join('');
+}
+$('#pending').onclick=async e=>{
+  const row=e.target.closest('.pend'),b=e.target.closest('button');if(!row||!b)return;
+  const id=+row.dataset.id;
+  if(b.classList.contains('drop')){await db.deletePending(id);renderPending()}
+  else if(b.classList.contains('retry')){clearError();await runPending(id)}
+};
 
 /* ---------- views ---------- */
 function hero(){
@@ -70,17 +170,7 @@ async function home(){
     +badgesHTML()
     +`<div class="dock">${recBox('rec','Record','Tap to start, tap again to stop. You can pause any time.')}</div>`;
   if(!groq.getKey())showError(keyMissingMsg);
-  $('#rec').onclick=ev=>toggleRecord(ev.currentTarget,async(parts,meta)=>{
-    busy('Transcribing…');
-    try{
-      const transcript=await transcribing(parts);
-      if(!transcript)throw new Error('No speech was detected. Try recording again.');
-      busy('Extracting recipe…');
-      const r=await groq.extractRecipe(transcript);
-      draft={name:r.dish,ingredients:r.ingredients,steps:r.steps,transcript,parts,long:meta.long};
-      location.hash='#/review';
-    }catch(e){sound.play('error');await route(true);fail(e)}
-  });
+  $('#rec').onclick=ev=>toggleRecord(ev.currentTarget,{kind:'new'});
 }
 
 /** Copy the review form's current values into the draft (so re-renders keep edits). */
@@ -111,26 +201,13 @@ function review(){
   $('#add-ing').onclick=()=>ings.insertAdjacentHTML('beforeend',ingRow({name:'',amount:'',unit:''}));
   $('#add-step').onclick=()=>steps.insertAdjacentHTML('beforeend',stepRow(''));
   app.onclick=e=>{if(e.target.classList.contains('x'))e.target.parentElement.remove()};
-  $('#discard').onclick=()=>{draft=null;location.hash='#/'};
-  $('#add-more').onclick=ev=>toggleRecord(ev.currentTarget,async(parts,meta)=>{
-    syncDraft();
-    busy('Transcribing…');
-    try{
-      const transcript=await transcribing(parts);
-      if(!transcript)throw new Error('No speech was detected. Try recording again.');
-      busy('Adding to your dish…');
-      const r=await groq.extractRecipe(transcript);
-      Object.assign(draft,db.mergeRecipe(draft,r),{
-        name:draft.name||r.dish,
-        transcript:[draft.transcript,transcript].join('\n\n'),
-        parts:[...draft.parts,...parts],long:draft.long||meta.long});
-      sound.play('success');review();
-    }catch(e){sound.play('error');review();fail(e)}
-  });
+  $('#discard').onclick=async()=>{await Promise.all(d.pendingIds.map(db.deletePending));draft=null;location.hash='#/'};
+  $('#add-more').onclick=ev=>toggleRecord(ev.currentTarget,{kind:'new',intoDraft:true});
   $('#save').onclick=async()=>{
     syncDraft();
     if(!d.name)return showError('Please enter a dish name.');
     const v=await db.saveVersion({name:d.name,ingredients:d.ingredients,steps:d.steps,transcript:d.transcript,parts:d.parts});
+    await Promise.all(d.pendingIds.map(db.deletePending));
     const res=game.award('dish',{newDish:v.newDish,n:v.n,long:d.long});
     draft=null;clearError();location.hash='#/version/'+v.id;celebrate(res);
   };
@@ -170,29 +247,8 @@ async function version(id){
   <div class="after"><h2>Still cooking?</h2>${recBox('add-more','Add to this dish','Add more ingredients or steps to this version')}</div>
   <div class="after"><h2>After eating</h2><div id="after">${afterHTML}</div>
   ${recBox('rec','Record after eating note','Tap to record how it turned out','inline')}</div>`;
-  $('#add-more').onclick=ev=>toggleRecord(ev.currentTarget,async(parts,meta)=>{
-    busy('Transcribing…');
-    try{
-      const transcript=await transcribing(parts);
-      if(!transcript)throw new Error('No speech was detected. Try recording again.');
-      busy('Adding to your dish…');
-      const recipe=await groq.extractRecipe(transcript);
-      await db.appendToVersion(v.id,{parts,transcript,recipe});
-      const res=game.award('append',{long:meta.long});
-      await route();celebrate(res);
-    }catch(e){sound.play('error');await route(true);fail(e)}
-  });
-  $('#rec').onclick=ev=>toggleRecord(ev.currentTarget,async parts=>{
-    busy('Transcribing…');
-    try{
-      const transcript=await transcribing(parts);
-      if(!transcript)throw new Error('No speech was detected. Try recording again.');
-      busy('Rating…');
-      const r=await groq.extractRating(transcript);
-      afterDraft={versionId:v.id,rating:r.rating,notes:r.notes,transcript,parts};
-      route();
-    }catch(e){sound.play('error');await route(true);fail(e)}
-  });
+  $('#add-more').onclick=ev=>toggleRecord(ev.currentTarget,{kind:'append',targetId:v.id});
+  $('#rec').onclick=ev=>toggleRecord(ev.currentTarget,{kind:'after',targetId:v.id});
 }
 
 function afterReview(){
@@ -202,12 +258,12 @@ function afterReview(){
   <select id="rating">${[1,2,3,4,5].map(n=>`<option value="${n}" ${n===a.rating?'selected':''}>${n} – ${stars(n)}</option>`).join('')}</select>
   <label for="notes">Notes</label><textarea id="notes">${esc(a.notes)}</textarea>
   <div class="row"><button class="btn" id="save-after">Save</button><button class="btn sec" id="cancel-after">Cancel</button></div>`;
-  $('#cancel-after').onclick=()=>{const id=a.versionId;afterDraft=null;location.hash='#/version/'+id;route()};
+  $('#cancel-after').onclick=()=>{const id=a.versionId;db.deletePending(a.pendingId);afterDraft=null;location.hash='#/version/'+id;route()};
   $('#save-after').onclick=async()=>{
     const rating=+$('#rating').value;
     await db.saveAfter(a.versionId,{rating,notes:$('#notes').value.trim(),transcript:a.transcript,audio:a.parts[0],parts:a.parts});
     const res=game.award('rate',{rating});
-    afterDraft=null;await route();celebrate(res);
+    await db.deletePending(a.pendingId);afterDraft=null;await route();celebrate(res);
   };
 }
 
@@ -248,18 +304,7 @@ async function pantryView(){
     }catch(e){sound.play('error');cook.err=e.message==='NO_KEY'?'Add your Groq API key in Settings to get new ideas.':e.message}
     if(location.hash==='#/pantry')out.innerHTML=cookHTML();
   };
-  $('#rec').onclick=ev=>toggleRecord(ev.currentTarget,async parts=>{
-    busy('Transcribing…');
-    try{
-      const transcript=await transcribing(parts);
-      if(!transcript)throw new Error('No speech was detected. Try recording again.');
-      busy('Reading your list…');
-      const items=await groq.extractPantry(transcript);
-      const added=pantry.add(items);
-      sound.play('success');await route(true);
-      if(!added.length)showError('Nothing new heard. Try again?');
-    }catch(e){sound.play('error');await route(true);fail(e)}
-  });
+  $('#rec').onclick=ev=>toggleRecord(ev.currentTarget,{kind:'pantry'});
 }
 
 function settings(){
@@ -285,7 +330,7 @@ document.addEventListener('click',e=>{if(e.target.closest('.btn,.card,.tile'))so
 /* ---------- router ---------- */
 async function route(keep){
   const [,page,arg]=location.hash.slice(1).split('/');
-  if(recorder){recorder.stop().catch(()=>{});recorder=null}
+  if(recorder){const r=recorder,id=activeId;recorder=null;activeId=null;await finalizeRecording(r,id)}
   urls.splice(0).forEach(URL.revokeObjectURL);
   if(keep!==true)clearError();
   try{
@@ -296,7 +341,8 @@ async function route(keep){
     else if(page==='version')afterDraft&&afterDraft.versionId===+arg?afterReview():await version(arg);
     else await home();
   }catch(e){fail(e)}
+  renderPending();
 }
 addEventListener('hashchange',()=>route());
-route();
+route().then(async()=>{if((await db.listPending()).some(p=>p.status==='queued'))scheduleDrain()});
 if('serviceWorker'in navigator)navigator.serviceWorker.register('sw.js').catch(()=>{});

@@ -102,3 +102,5 @@ summary{font-weight:800;cursor:pointer}
 .card.idea{background:#fff0f6}
 .pantry-link{background:var(--pink-l)}
 .tile{background:var(--pink-l);border:3px solid var(--ink);border-radius:var(--r);box-shadow:var(--sh);padding:14px 16px;margin-bottom:14px;display:block;color:inherit;text-decoration:none}.tile:active{transform:translateY(3px);box-shadow:0 1px 0 var(--ink)}
+
+.banner.pend{background:#fff0c9;color:var(--ink)}.banner.pend .row{margin-top:8px;gap:8px}

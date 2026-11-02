@@ -2,11 +2,12 @@ const DB='cooking-journal';
 let dbp;
 function open(){
   return dbp??=new Promise((res,rej)=>{
-    const r=indexedDB.open(DB,1);
+    const r=indexedDB.open(DB,2);
     r.onupgradeneeded=()=>{
-      const d=r.result;
-      d.createObjectStore('dishes',{keyPath:'id',autoIncrement:true}).createIndex('key','key',{unique:true});
-      d.createObjectStore('versions',{keyPath:'id',autoIncrement:true}).createIndex('dishId','dishId');
+      const d=r.result,has=n=>d.objectStoreNames.contains(n);
+      if(!has('dishes'))d.createObjectStore('dishes',{keyPath:'id',autoIncrement:true}).createIndex('key','key',{unique:true});
+      if(!has('versions'))d.createObjectStore('versions',{keyPath:'id',autoIncrement:true}).createIndex('dishId','dishId');
+      if(!has('pending'))d.createObjectStore('pending',{keyPath:'id',autoIncrement:true});
     };
     r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error);
   });
@@ -74,3 +75,23 @@ export async function appendToVersion(id,{parts,transcript,recipe}){
   await wrap((await store('versions','readwrite')).put(v));
   return v;
 }
+
+/* ---------- pending sessions: audio is saved here the moment it exists, removed only after the result is saved ---------- */
+/** kind: 'new' | 'append' | 'after' | 'pantry'. status: 'recording' | 'new' | 'queued' | 'error' */
+export async function createPending(o){
+  const p={kind:'new',targetId:null,intoDraft:false,parts:[],live:null,texts:[],status:'recording',error:'',createdAt:Date.now(),...o};
+  p.id=await wrap((await store('pending','readwrite')).add(p));
+  return p;
+}
+export const getPending=async id=>wrap((await store('pending')).get(id));
+export const listPending=async()=>(await wrap((await store('pending')).getAll())).sort((a,b)=>a.createdAt-b.createdAt);
+/** Merge fields into a pending record (read-modify-write in one transaction). */
+export async function patchPending(id,fields){
+  const t=(await open()).transaction('pending','readwrite'),st=t.objectStore('pending');
+  const p=await wrap(st.get(id));
+  if(!p)return null;
+  Object.assign(p,fields);
+  await wrap(st.put(p));
+  return p;
+}
+export async function deletePending(id){await wrap((await store('pending','readwrite')).delete(id))}

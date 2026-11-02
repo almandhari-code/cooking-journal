@@ -31,7 +31,7 @@ export class Recorder{
     const rec=new MediaRecorder(this.stream,{...(mime?{mimeType:mime}:{}),audioBitsPerSecond:48000});
     rec.ondataavailable=e=>e.data.size&&chunks.push(e.data);
     rec.finished=new Promise(res=>{rec.onstop=()=>{
-      if(chunks.length)this.parts.push(new Blob(chunks,{type:rec.mimeType||'audio/webm'}));
+      if(chunks.length){this.parts.push(new Blob(chunks,{type:rec.mimeType||'audio/webm'}));this.onChange?.(this.parts.slice())}
       res();
     }});
     rec.start();
