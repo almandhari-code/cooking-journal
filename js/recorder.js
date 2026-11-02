@@ -3,7 +3,15 @@ export function pickMime(){
     if(window.MediaRecorder?.isTypeSupported?.(t))return t;
   return '';
 }
+/** Records one session with pause/resume. Rotates the MediaRecorder every
+ *  chunkMs of *recorded* time (default 10 min) so each part is a standalone,
+ *  small file (well under Groq's 25 MB limit). stop() resolves to Blob[]. */
 export class Recorder{
+  constructor(){
+    this.chunkMs=window.CJ_CHUNK_MS||600000;
+    this.parts=[];this.paused=false;this.pauses=0;this.ms=0;
+  }
+  get seconds(){return Math.floor(this.ms/1000)}
   async start(){
     if(!navigator.mediaDevices?.getUserMedia||!window.MediaRecorder)
       throw new Error('Recording is not supported in this browser.');
@@ -14,19 +22,39 @@ export class Recorder{
       if(e.name==='NotFoundError')throw new Error('No microphone was found on this device.');
       throw new Error('Could not start the microphone: '+e.message);
     }
-    const mime=pickMime();
-    this.chunks=[];
-    this.rec=new MediaRecorder(this.stream,mime?{mimeType:mime}:undefined);
-    this.rec.ondataavailable=e=>e.data.size&&this.chunks.push(e.data);
-    this.rec.start();
+    this.rec=this._begin();
+    this.segMs=0;this.last=performance.now();
+    this.timer=setInterval(()=>this._tick(),200);
   }
-  stop(){
-    return new Promise(res=>{
-      this.rec.onstop=()=>{
-        this.stream.getTracks().forEach(t=>t.stop());
-        res(new Blob(this.chunks,{type:this.rec.mimeType||'audio/webm'}));
-      };
-      this.rec.stop();
-    });
+  _begin(){
+    const mime=pickMime(),chunks=[];
+    const rec=new MediaRecorder(this.stream,{...(mime?{mimeType:mime}:{}),audioBitsPerSecond:48000});
+    rec.ondataavailable=e=>e.data.size&&chunks.push(e.data);
+    rec.finished=new Promise(res=>{rec.onstop=()=>{
+      if(chunks.length)this.parts.push(new Blob(chunks,{type:rec.mimeType||'audio/webm'}));
+      res();
+    }});
+    rec.start();
+    return rec;
+  }
+  _tick(){
+    const now=performance.now(),dt=now-this.last;this.last=now;
+    if(this.paused)return;
+    this.ms+=dt;this.segMs+=dt;
+    if(this.segMs>=this.chunkMs){ // start the next chunk first so no audio is lost, then close the old one
+      const old=this.rec;this.rec=this._begin();this.segMs=0;old.stop();
+    }
+  }
+  pause(){if(this.paused)return;this.rec.pause();this.paused=true;this.pauses++}
+  resume(){if(!this.paused)return;this.rec.resume();this.paused=false;this.last=performance.now()}
+  async stop(){
+    clearInterval(this.timer);
+    const rec=this.rec;
+    if(rec.state!=='inactive')rec.stop();
+    await rec.finished;
+    this.stream.getTracks().forEach(t=>t.stop());
+    // earlier rotated recorders may still be flushing; parts are pushed in stop order
+    await new Promise(r=>setTimeout(r,0));
+    return this.parts;
   }
 }

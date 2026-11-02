@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="theme-color" content="#d9622b">
+<meta name="theme-color" content="#ff8fb8">
 <title>Cooking Journal</title>
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icons/icon-192.png">
@@ -13,10 +13,11 @@
 <body>
 <header class="top">
   <a href="#/" class="brand">🍳 Cooking Journal</a>
-  <a href="#/settings" class="link" id="nav-settings">Settings</a>
+  <span class="nav"><button id="mute" class="icon-btn" type="button" aria-pressed="false" aria-label="Mute sounds">🔊</button><a href="#/settings" class="link" id="nav-settings">Settings</a></span>
 </header>
 <div id="error" class="banner error" role="alert" hidden></div>
 <main id="app"></main>
+<div id="toast" role="status" aria-live="polite"></div>
 <script type="module" src="app.js"></script>
 </body>
 </html>

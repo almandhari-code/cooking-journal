@@ -18,14 +18,31 @@ async function call(path,opts){
   return r.json();
 }
 
-export async function transcribe(blob){
+export const OMANI_VOCAB=['machboos','bzar','shuwa','harees','mashuai','laban','qahwa','halwa','kahwa','maqboos','saloona','mashkak','khubz','dates','cardamom','saffron','loomi'];
+export const WHISPER_PROMPT='Omani home cooking. Food words: '+OMANI_VOCAB.join(', ')+'.';
+export const MAX_BYTES=25*1024*1024;
+
+export async function transcribe(blob,prev=''){
+  if(blob.size>=MAX_BYTES)throw new Error('An audio chunk is over Groq\'s 25 MB limit. Try a shorter recording.');
   const ext=blob.type.includes('mp4')?'mp4':'webm';
   const f=new FormData();
   f.append('file',blob,`audio.${ext}`);
   f.append('model','whisper-large-v3-turbo');
   f.append('language','en');
+  // vocab first, tail of previous chunk last (Whisper only reads the end of long prompts)
+  f.append('prompt',WHISPER_PROMPT+(prev?' '+prev.slice(-150):''));
   const j=await call('/audio/transcriptions',{method:'POST',body:f});
   return (j.text||'').trim();
+}
+/** Transcribe chunks in order and merge. onPart(i,n) is called before each chunk. */
+export async function transcribeParts(parts,onPart){
+  let out=[];
+  for(let i=0;i<parts.length;i++){
+    onPart?.(i+1,parts.length);
+    const t=await transcribe(parts[i],out.join(' '));
+    if(t)out.push(t);
+  }
+  return out.join(' ');
 }
 
 async function chatJSON(system,user){
@@ -44,10 +61,12 @@ async function chatJSON(system,user){
   throw new Error('Could not understand the model response. '+(last?.message||''));
 }
 
+export const RECIPE_PROMPT=`You turn a spoken transcript of someone cooking (often Omani or Gulf home cooking) into a recipe. The transcript can be long and messy.
+IGNORE chatter, small talk, jokes, interruptions, repeated or nonsense words, and silence artifacts such as "thank you" or "you". Keep ONLY cooking information: dish name, ingredients, amounts, steps, times, temperatures. Never invent ingredients or steps.
+Normalize Omani/Arabic food spellings to these standard forms: ${OMANI_VOCAB.join(', ')}. For example makbous/machbous/makboos -> machboos, bazaar/bizar/bezar -> bzar, kahwa/gahwa -> qahwa, lomi/limu omani -> loomi.
+Reply with JSON only: {"dish":string,"ingredients":[{"name":string,"amount":string,"unit":string}],"steps":[string]}. Use empty strings when the dish name, amount or unit are unknown. If there is no cooking content, return empty lists.`;
 export async function extractRecipe(transcript){
-  const o=await chatJSON(
-    'Extract a recipe from a spoken cooking transcript. Reply with JSON only: {"dish":string,"ingredients":[{"name":string,"amount":string,"unit":string}],"steps":[string]}. Use empty strings when amount/unit are unknown.',
-    transcript);
+  const o=await chatJSON(RECIPE_PROMPT,transcript);
   return {
     dish:String(o.dish||''),
     ingredients:(Array.isArray(o.ingredients)?o.ingredients:[]).map(i=>({name:String(i.name??''),amount:String(i.amount??''),unit:String(i.unit??'')})),
